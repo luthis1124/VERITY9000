@@ -7,7 +7,7 @@ I gave up trying to get EDCopilot to work on Linux, so I decided to build my own
 
 Remember Farscape? What if your ship was alive and autonomous?
 
-This project is not meant to be a 1:1 copy of EDCopilot, rather, the goal is to increase immersion and 
+This project is not meant to be a 1:1 copy of EDCopilot, rather, the goal is to increase immersion and make your ship a character you can interact with, that will grow and change over time.
 
 Built as an exercise to learn how to build AI solutions that include:
 
