@@ -27,10 +27,10 @@ It is not too far off from parity with VoiceAttack, but still a significant way 
 
 CURRENT FUNCTIONALITY:
 
-Voice controls for ship functions
-Alerts when you enter a system with a point of interest
-Providing next closest station when doing a Rare Commodities run
-Alerting when fuel is low
+- Voice controls for ship functions
+- Alerts when you enter a system with a point of interest
+- Providing next closest station when doing a Rare Commodities run
+- Alerting when fuel is low
 
 CURRENT TASK:
 
