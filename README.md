@@ -44,3 +44,7 @@ say: "Where is the closest point of interest?"
 say: "What is the point of interest in this system?"
 say: "Give me a history of the Thargoids"
 say: "Stop acting like an AI, add some enthusiasm and sarcasm to your personality"
+
+FINAL NOTES:
+
+This is not ready for deployment yet, not included in this repo is a properly indexed mongoDB with system information, POI locations, and a RAG db with the full context of the Elite Wiki that are not included here (pending license checks etc)
