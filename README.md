@@ -30,11 +30,28 @@ CURRENT FUNCTIONALITY:
 Voice controls for ship functions
 Alerts when you enter a system with a point of interest
 Providing next closest station when doing a Rare Commodities run
+Alerting when fuel is low
+
+CURRENT TASK:
+
+- Build out AI Tools. API Functions and DB exist with all the data, they just need to be connected to the LLM.
+- Optimise tool calls
+- Test a smaller (2B) LLM model for tool calls
+- Implement basic neutron plotting: "Where is the next neutron star on my way to Sol"
+- Status.json monitoring
 
 FUTURE PLANS:
 
-Neutron star plotting
-AI tool implementations for ship controls
+- Neutron star plotting
+- AI tool implementations for ship controls
+- Up-to-date market information
+- Where is 'x', with intelligent context
+- Saved states
+- Faster tool calls
+
+...
+
+- Fully autonomous ship control, so you can sit in the copilot seat with a second account, and be chauffered around the galaxy. Or have your second account follow you on trade runs. 
 
 EXAMPLES:
 
