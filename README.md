@@ -39,10 +39,15 @@ AI tool implementations for ship controls
 EXAMPLES:
 
 say: "Night vision" > night vision is activated
+
 say: "Verity, when I say 'green googles' I want you to activate night vision"
+
 say: "Where is the closest point of interest?"
+
 say: "What is the point of interest in this system?"
+
 say: "Give me a history of the Thargoids"
+
 say: "Stop acting like an AI, add some enthusiasm and sarcasm to your personality"
 
 FINAL NOTES:
