@@ -34,11 +34,11 @@ CURRENT FUNCTIONALITY:
 
 CURRENT TASK:
 
-- Build out AI Tools. API Functions and DB exist with all the data, they just need to be connected to the LLM.
-- Optimise tool calls
-- Test a smaller (2B) LLM model for tool calls
+- Build out AI Tools. API Functions and DB exist with all the data, they just need to be connected to the LLM. (Done)
+- Optimise tool calls (Done)
+- Test a smaller (2B) LLM model for tool calls (Done)
 - Implement basic neutron plotting: "Where is the next neutron star on my way to Sol"
-- Status.json monitoring
+- Status.json monitoring (Done)
 
 FUTURE PLANS:
 
