@@ -7,7 +7,14 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, System
 from langchain.agents import create_agent
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_chroma import Chroma
+from torch._export.passes import replace_with_hop_pass_util
+
 from InputControls import InputControls
+from ollama import Client
+from enum import Enum
+
+import json
+from langchain_core.output_parsers import JsonOutputParser
 
 """
 {'messages': 
@@ -17,8 +24,74 @@ HumanMessage(content="it's uh, too dark.", additional_kwargs={}, response_metada
 AIMessage(content='Deploying night vision now.', additional_kwargs={}, response_metadata={'model': 'gemma2b:latest', 'created_at': '2026-06-17T07:21:33.630749326Z', 'done': True, 'done_reason': 'stop', 'total_duration': 4461982255, 'load_duration': 363711467, 'prompt_eval_count': 423, 'prompt_eval_duration': 44789000, 'eval_count': 420, 'eval_duration': 4049649000, 'logprobs': None, 'model_name': 'gemma2b:latest', 'model_provider': 'ollama'}, id='lc_run--019ed474-dd4f-7883-818d-6b9dbfcb0a9a-0', tool_calls=[], invalid_tool_calls=[], usage_metadata={'input_tokens': 423, 'output_tokens': 420, 'total_tokens': 843})]}
 
 """
+
+
+class ToolRoute(str, Enum):
+    SHIP = "SHIP"
+    INFO = "INFO"
+    NEUTRONS = "NEUTRONS"
+    STATIONSERVICES = "STATIONSERVICES"
+    POINT_OF_INTEREST = "POINT_OF_INTEREST"
+    NONE = "NONE"
+
 # BASIC_MODE = True
 BASIC_MODE = False
+
+
+ROUTER_PROMPT = """
+You are a request classifier.
+
+The context is the video game Elite Dangerous.
+
+Classify the user's message into exactly one category.
+
+Possible categories:
+
+SHIP
+INFO
+NEUTRONS
+STATIONSERVICES
+POINT_OF_INTEREST
+NONE
+
+Definitions:
+
+POINT_OF_INTEREST
+- Used to find nearest point of interest
+- Check and give point of interest info for current system
+
+SHIP
+- Any ship control actions
+- throttle, supercruise, setspeedzero
+- cargo scoop, night vision, landing gear
+
+INFO
+- Any questions about game lore
+- Game information
+- People, places, exobiology, etc
+
+NEUTRONS
+- Used for finding efficient routes to star systems
+- Find nearest neutron star
+
+STATIONSERVICES
+- Used for finding the nearest station with the specified service
+- Interstellar Factor
+- Technology Broker
+- Material Trader
+- Universal Cartographics
+- Rare commodities
+- etc (If the user asks for a station with some service, choose this tool)
+
+NONE
+- Fallback when input doesn't match a category and should not be processed.
+- provide reasoning for no matches
+"""
+#
+# Return ONLY the category name.
+# No explanations.
+# No punctuation.
+# """
 
 class OllamaRunnerQ:
 
@@ -58,10 +131,16 @@ class OllamaRunnerQ:
 
         tool_prompt = self.system_prompts("tool_prompt2")
 
-        self.tool_agent = create_agent(self.llm, tools=self.agent_router(),
-                                       checkpointer=self.memory, system_prompt=tool_prompt)
+        # self.tool_agent = create_agent(self.llm, tools=self.agent_router(),
+        #                                checkpointer=self.memory, system_prompt=tool_prompt)
+        self.tool_agent = create_agent(self.llm, tools=self.agent_router(), system_prompt=tool_prompt)
+        self.poi_agent = create_agent(self.llm, tools=self.poi_agent_router(), system_prompt=tool_prompt)
+        self.services_agent = create_agent(self.llm, tools=self.service_agent_router(), system_prompt=tool_prompt)
+
+        self.client = Client()
 
         self.to_tts.put("loading AI")
+
 
     def run(self):
         print(f"[{self.name}] Process started (PID: {multiprocessing.current_process().pid})")
@@ -75,12 +154,261 @@ class OllamaRunnerQ:
                             print("basic mode call")
                             self.call_llm_chat(request)
                         else:
-                            self.call_llm_advanced(request)
+                            # self.call_llm_advanced(request)
+                            self.call_llm_tool(request)
+
                 except Exception as e:
                     pass
 
         except Exception as e:
             print(f"[{self.name}] Error: {e}")
+
+    def select_tool(self, user_message: str) -> ToolRoute:
+        response = self.client.chat(
+            model="gemma2b:latest",
+
+            messages=[
+                {"role": "system", "content": ROUTER_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            format={
+                "type": "string",
+                "enum": [
+                    "SHIP",
+                    "INFO",
+                    "NEUTRONS",
+                    "STATIONSERVICES",
+                    "POINT_OF_INTEREST",
+                    "NONE"
+                ]
+            },
+            options={
+                "temperature": 0,
+                "num_predict": 10 #3
+            }
+        )
+
+        print("toolroute says " + str(response))
+
+        try:
+            return ToolRoute(
+                response["message"]["content"].strip()
+            )
+        except ValueError:
+            return ToolRoute.NONE
+
+    def call_llm_tool(self, user_message):
+        route = self.select_tool(user_message)
+
+        match route:
+            case ToolRoute.SHIP:
+                self.Ship(user_message)
+            case ToolRoute.INFO:
+                self.call_llm_chat(user_message)
+            case ToolRoute.NEUTRONS:
+                self.Neutron()
+            case ToolRoute.POINT_OF_INTEREST:
+                self.call_llm_poi(user_message)
+            case ToolRoute.STATIONSERVICES:
+                self.call_llm_services(user_message)
+            case ToolRoute.NONE:
+                print("no llm action matched")
+
+    def Ship(self, message):
+        self.call_llm_advanced(message)
+
+    def Neutron(self):
+        print("chose neutron functions")
+
+        print("system is: " + self.shared["system_name"])
+
+        if not self.shared["system_name"]:
+            self.shared["system_name"] = "Sol"
+
+        from DBTools import DBTools
+        import subprocess
+        db = DBTools()
+        neutron_single = db.find_nearest_neutron(player_coords=self.shared["star_pos"], limit=1,
+                                                 current_system=self.shared["system_name"])
+
+        galmap_name = neutron_single[0]["name"]
+
+        self.to_tts.put("The nearest neutron star is " + galmap_name)
+
+        subprocess.run(
+            ["wl-copy"],
+            input=galmap_name,
+            text=True,
+            check=True
+        )
+
+    def call_llm_services(self, user_input: str):
+        human_message = HumanMessage(content=user_input)
+        result = self.services_agent.invoke({"messages": [human_message]})
+        print("ai says:" + result["messages"][-1].content)
+        ai_to_say = result["messages"][-1].content
+        self.to_tts.put(ai_to_say)
+        self.analyze_agent_response(result)
+
+    def service_agent_router(self):
+        @tool
+        def visited_systems():
+            """
+            returns a list of systems recently visited
+            """
+            return self.shared["visited_systems"]
+
+        @tool
+        def visited_systems_with_rare_goods():
+            """
+            returns a list of systems with rare commodities (rare goods) recently visited
+            """
+            return self.shared["visited_rare_goods"]
+
+        @tool
+        def find_station_with_service(service):
+            """
+            Input: service name
+            Used to find the nearest station with x service.
+            Returns a list of stations, distance to station, and system names.
+
+            The user will not want to travel to stations with an arrival distance of greater than 100,000
+            If the user is in the same system as a service, they probably do not want the service in that system.
+            Service names:
+            Apex Interstellar Transport
+            Bartender
+            Black Market
+            Contacts
+            Crew Lounge
+            Fleet carrier administration
+            Fleet carrier vendor
+            Frontline Solutions
+            Interstellar Factors Contact
+            Material Trader
+            Missions
+            Pioneer Supplies
+            Refuel
+            Repair
+            Restock
+            Search and Rescue
+            System colonisation
+            Technology Broker
+            Tuning
+            Universal Cartographics
+            Vista Genomics
+            colonisationcontribution
+            """
+
+            from DBTools import DBTools
+            db = DBTools()
+
+            player_pos = self.shared["star_pos"]
+            stations = db.find_nearest(player_coords=player_pos, limit=4, service=service)
+
+            return stations
+
+        @tool
+        def find_nearest_rare_goods():
+            """
+            Used to find the nearest station that sells rare commodities.
+            The user may interchange the words goods and commodities.
+
+            Returns a list of stations, distance to station, and system names.
+            The user will not want to travel to stations with an arrival distance of greater than 100,000
+
+            """
+            from DBTools import DBTools
+            db = DBTools()
+
+            player_pos = self.shared["star_pos"]
+            stations = db.find_nearest_rares(player_coords=player_pos, limit=10,
+                                             current_system=self.shared["system_name"])
+
+            return stations
+
+        @tool
+        def put_in_clipboard(text="none"):
+            """
+            Used to put a SINGLE SYSTEM NAME into the clipboard
+            so the user can paste it into the galaxy map.
+            Examples:
+                Sol
+                Col 285 Sector FE-M b22-1
+            """
+            import subprocess
+
+            subprocess.run(
+                ["wl-copy"],
+                input=text,
+                text=True,
+                check=True
+            )
+
+        return [find_station_with_service, find_nearest_rare_goods, put_in_clipboard]
+
+    def call_llm_poi(self, user_input: str):
+        print("calling poi")
+        human_message = HumanMessage(content=user_input)
+        result = self.poi_agent.invoke({"messages": [human_message]})
+        print("ai says:" + result["messages"][-1].content)
+        ai_to_say = result["messages"][-1].content
+        self.to_tts.put(ai_to_say)
+        self.analyze_agent_response(result)
+
+    def poi_agent_router(self):
+        @tool
+        def system_poi():
+            """
+            Get information about the point (or points) of interest
+            in the current system, if any
+            """
+
+            poi_info = "None"
+
+            poi_result = self.shared["system_poi"]
+            if poi_result:
+                for poi in poi_result:
+                    poi_message = poi["name"] + ". " + poi["descriptionHtml"]
+                    poi_info += poi_message
+
+            return poi_info
+
+        @tool
+        def nearest_poi():
+            """
+            Returns a list of the closest points of interest
+            """
+
+            from POIChecker import POIChecker
+            poi = POIChecker()
+
+            player_pos = self.shared["star_pos"]
+            print("player pos: " + str(player_pos))
+            near = poi.get_nearest_poi(player_coords=player_pos, current_system=self.shared["system_name"])
+
+            print("pois found: " + str(near))
+
+            return near
+
+        @tool
+        def put_in_clipboard(text="none"):
+            """
+            Used to put a SINGLE SYSTEM NAME into the clipboard
+            so the user can paste it into the galaxy map.
+            Examples:
+                Sol
+                Col 285 Sector FE-M b22-1
+            """
+            import subprocess
+
+            subprocess.run(
+                ["wl-copy"],
+                input=text,
+                text=True,
+                check=True
+            )
+
+        return [system_poi, nearest_poi, put_in_clipboard]
 
     def agent_router(self):
         """
@@ -98,18 +426,54 @@ class OllamaRunnerQ:
             """
             tool used to control ship functions. To perform an action, call this tool with an available action:
 
-            DeployHeatSink
+            DeployHeatSink < deploys a heatsink to counter high ship temps
             NightVisionToggle
             ShipSpotLightToggle
-            UseBoostJuice
+            UseBoostJuice < boost ('boostjuice' is just the name of the command, but 'juice' is not referenced in the game. Just Boost)
             SystemMapOpen
             GalaxyMapOpen
             ExplorationFSSEnter
-            SetSpeedZero
-            Supercruise
+            Supercruise < Enter or exit supercruise
             DeployHardpointToggle
             ToggleCargoScoop
             LandingGearToggle
+            HyperSuperCombination < Enter or exit supercruise, or start jump to next star
+            OrbitLinesToggle
+            """
+            print("ai says do action:" + str(message))
+            if not self.action.do_action(message):
+                self.to_tts.put("I couldn't do that")
+
+        @tool
+        def ship_other_functions(message):
+            """
+            IncreaseEnginesPower
+            IncreaseWeaponsPower
+            IncreaseSystemsPower
+            ResetPowerDistribution
+            TargetNextRouteSystem
+            CycleFireGroupNext
+            FocusRightPanel
+            PlayerHUDModeToggle
+            """
+
+        @tool
+        def flight_functions(message):
+            """
+            tool used to control flight functions.
+
+            To perform an action, call this tool with an available action:
+
+            YawLeftButton
+            YawRightButton
+            LeftThrustButton < move horizontally left
+            RightThrustButton < move horizontally right
+            UpThrustButton < move vertically up
+            DownThrustButton < move vertically down
+            ForwardKey < increase thrust
+            BackwardKey < decrease thrust
+            SetSpeedZero
+            SetSpeed100
             """
             print("ai says do action:" + str(message))
             if not self.action.do_action(message):
@@ -127,15 +491,45 @@ class OllamaRunnerQ:
             print("chose ship status")
 
         @tool
-        def hyperspace_functions(message):
+        def chat(message):
             """
-            tool used to activate hyperspace drive (FSD),
-
-            plot route to a particular system,
-
-            advise on number of jumps, lightyear distances, etc
+            default, fallback tool. When no other tool is called,
+            call this tool and supply a message for the user.
             """
-            print("chose hyperspace functions")
+            self.to_tts.put(message)
+
+        @tool
+        def find_neutron_star():
+            """
+            tool used to find the nearest neutron star.
+
+            This will play a notification for the user.
+
+            No reply message from the AI is required.
+            """
+
+            print("chose neutron functions")
+
+            print("system is: " + self.shared["system_name"])
+
+            if not self.shared["system_name"]:
+                self.shared["system_name"] = "Sol"
+
+            from DBTools import DBTools
+            import subprocess
+            db = DBTools()
+            neutron_single = db.find_nearest_neutron(player_coords=self.shared["star_pos"], limit=1, current_system=self.shared["system_name"])
+
+            galmap_name = neutron_single[0]["name"]
+
+            self.to_tts.put("The nearest neutron star is " + galmap_name)
+
+            subprocess.run(
+                ["wl-copy"],
+                input=galmap_name,
+                text=True,
+                check=True
+            )
 
         @tool
         def market_queries(message):
@@ -155,21 +549,9 @@ class OllamaRunnerQ:
 
             or where interesting points of interest are
             """
+
+
             print("chose non-market functions")
-
-        @tool
-        def system_queries(message):
-            """
-            used to provide information on the current system, ie
-
-            powerplay information, local points of interest, goods available in the system,
-
-            any rare goods, danger levels, etc
-            """
-
-            print("chose system functions")
-            print("message to pass is: " + message)
-
 
         @tool
         def ai_learning_and_interactions(message):
@@ -193,17 +575,21 @@ class OllamaRunnerQ:
         # return [ship_functions, ship_status, market_queries, non_market_queries, hyperspace_functions, system_queries,
             # ai_learning_and_interactions]
 
-        return [ship_functions, ai_learning_and_interactions]
+        # return [ship_functions, ai_learning_and_interactions, find_neutron_star]
+
+        return [ship_functions, flight_functions]
 
     def call_llm_advanced(self, user_input: str):
 
         human_message = HumanMessage(content=user_input)
 
-        result = self.tool_agent.invoke({"messages": [human_message]}, self.config, )
+        # result = self.tool_agent.invoke({"messages": [human_message]}, self.config, )
+        result = self.tool_agent.invoke({"messages": [human_message]},)
         print("ai says:" + result["messages"][-1].content)
-        print("complete message:")
-        print(result)
+        # print("complete message:")
+        # print(result)
 
+        #
         # last_msg = result["messages"][-1]
         #
         # if not getattr(last_msg, "tool_calls", None):
@@ -214,9 +600,9 @@ class OllamaRunnerQ:
         #     self.to_tts.put(ai_to_say)
         ai_to_say = result["messages"][-1].content
         self.to_tts.put(ai_to_say)
-
-        if self.message_count % 20 == 0:
-            self.compress_memory()
+        #
+        # if self.message_count % 20 == 0:
+        #     self.compress_memory()
 
         self.analyze_agent_response(result)
 
@@ -308,8 +694,8 @@ class OllamaRunnerQ:
         self.message_count += 1
 
         # 2. trigger summarization every 10 messages
-        if self.message_count % 10 == 0:
-            self.compress_memory()
+        # if self.message_count % 10 == 0:
+        #     self.compress_memory()
 
     def system_prompts(self, prompt: str):
 
@@ -324,7 +710,7 @@ class OllamaRunnerQ:
                 - If the answer is unknown, state you do not have the information. Do not hallucinate.
                 """
 
-        tool_prompt: str = """
+        single_tool_prompt: str = """
                 this first call is ONLY used choose which tool the AI should activate. 
                 Select only from the available tools which one to use that fits the player query best, and do not give a verbal
                 reply to the player.
@@ -375,7 +761,7 @@ class OllamaRunnerQ:
             case "base":
                 return base
             case "tool_prompt":
-                return tool_prompt
+                return single_tool_prompt
             case "tool_prompt2":
                 return tool_prompt2
             case "force":

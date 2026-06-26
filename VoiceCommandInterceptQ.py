@@ -68,14 +68,14 @@ class VoiceCommandInterceptQ:
             "landing gear", "lending gear", "gear up",
             "night vision",
             "lights", "headlights",
-            "interstellar factor",
-            "technology broker", "tech broker", "tick broker", "broker", "take broken",
-            "material trader",
-            "cartographics", "universal cartographics",
-            "system poi", "system p o i",
-            "nearest point of interest", "nearest poi", "nearest p o i",
+            # "interstellar factor",
+            # "technology broker", "tech broker", "tick broker", "broker", "take broken",
+            # "material trader",
+            # "cartographics", "universal cartographics",
+            # "system poi", "system p o i",
+            # "nearest point of interest", "nearest poi", "nearest p o i",
             "copy current system",
-            "rare goods", "rare commodities", "goods"
+            # "rare goods", "rare commodities", "goods"
         ]
 
         word_count = len(input.split())
@@ -84,7 +84,8 @@ class VoiceCommandInterceptQ:
         has_verity = any(k in text for k in keywords)
         # has_verity = "verity" in input.lower().split()
 
-        if word_count > 5 or has_verity:
+        if word_count > 3 or has_verity:
+            print("wc > 3")
             self.to_llm.put(input)
             return True
 
@@ -98,23 +99,23 @@ class VoiceCommandInterceptQ:
         # print("do we get past the fuzz match?" )
         if results:
             match results[0][0]:
-                case "system poi" | "system p o i" | "point of interest":
-                    self.play_poi()
-                case "nearest point of interest" | "nearest poi" | "nearest p o i":
-                    self.get_nearest_poi()
-                case "interstellar factor":
-                    self.find_station(self.shared["star_pos"], 'Interstellar Factors Contact')
-                case "technology broker" | "tech broker" | "tick broker" | "broker":
-                    self.find_station(self.shared["star_pos"], 'Technology Broker')
-                case "material trader":
-                    self.find_station(self.shared["star_pos"], 'Material Trader')
-                case "cartographics" | "universal cartographics":
-                    self.find_station(self.shared["star_pos"], 'Universal Cartographics')
+                # case "system poi" | "system p o i" | "point of interest":
+                #     self.play_poi()
+                # # case "nearest point of interest" | "nearest poi" | "nearest p o i":
+                # #     self.get_nearest_poi()
+                # case "interstellar factor":
+                #     self.find_station(self.shared["star_pos"], 'Interstellar Factors Contact')
+                # case "technology broker" | "tech broker" | "tick broker" | "broker":
+                #     self.find_station(self.shared["star_pos"], 'Technology Broker')
+                # case "material trader":
+                #     self.find_station(self.shared["star_pos"], 'Material Trader')
+                # case "cartographics" | "universal cartographics":
+                #     self.find_station(self.shared["star_pos"], 'Universal Cartographics')
                 case "copy current system":
                     self.ap.affirmative()
                     self.clipboard(self.shared["system_name"])
-                case "rare goods" | "rare commodities" | "goods":
-                    self.get_next_rare_goods(self.shared["star_pos"])
+                # case "rare goods" | "rare commodities" | "goods":
+                #     self.get_next_rare_goods(self.shared["star_pos"])
                 case "deploy heatsink":
                     self.ap.affirmative()
                     self.action.do_action('DeployHeatSink')
@@ -165,6 +166,7 @@ class VoiceCommandInterceptQ:
 
                     return True
         else:
+            print("didn't match vci, sending to llm")
             self.to_llm.put(input)
             return True
 
@@ -192,7 +194,7 @@ class VoiceCommandInterceptQ:
     def get_next_rare_goods(self, player_pos):
         visited = self.shared["visited_rare_goods"]
         db = DBTools()
-        stations = db.find_nearest_rares(player_pos)
+        stations = db.find_nearest_rares(player_coords=player_pos, limit=10, current_system=self.shared["system_name"])
 
         for i, station in enumerate(stations, 18):
             print("checking system: " + str(station.get('systemName')))
@@ -207,7 +209,7 @@ class VoiceCommandInterceptQ:
 
     def find_station(self, player_pos, service):
         db = DBTools()
-        stations = db.find_nearest(player_pos, limit=1, service=service)
+        stations = db.find_nearest(player_coords=player_pos, limit=1, service=service)
 
         if not stations:
             self.ap.unable_service()

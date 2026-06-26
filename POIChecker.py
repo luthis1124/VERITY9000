@@ -18,45 +18,96 @@ class POIChecker:
     # player_pos = (595.90625, -436.3125, -1211.21875)
 
     def get_nearest_poi(self, player_coords: Tuple[float, float, float],  # (x, y, z)
-        limit: int = 1,):
+        limit: int = 5, current_system: str = "",):
         db_name = "mongotest"
         collection_name = "poi-1"
         client = MongoClient("mongodb://localhost:27017/")
+        collection = client[db_name][collection_name]
 
         try:
-            collection = client[db_name][collection_name]
 
-            # Service filter
+            max_range = 10000  # ly
+
             query = {
-                "coordinates": {"$exists": True}
+                "coordinates.0": {
+                    "$gte": player_coords[0] - max_range,
+                    "$lte": player_coords[0] + max_range,
+                },
+                "coordinates.1": {
+                    "$gte": player_coords[1] - max_range,
+                    "$lte": player_coords[1] + max_range,
+                },
+                "coordinates.2": {
+                    "$gte": player_coords[2] - max_range,
+                    "$lte": player_coords[2] + max_range,
+                },
+                "name": {"$ne": current_system},
+                "coordinates": {"$exists": True},
             }
 
             pipeline = [
                 {"$match": query},
                 {
                     "$addFields": {
-                        "distance": {
-                            "$sqrt": {
-                                "$add": [
-                                    {"$pow": [{"$subtract": [player_coords[0], "$coords.x"]}, 2]},
-                                    {"$pow": [{"$subtract": [player_coords[1], "$coords.y"]}, 2]},
-                                    {"$pow": [{"$subtract": [player_coords[2], "$coords.z"]}, 2]}
-                                ]
+                        "distSquared": {
+                            "$reduce": {
+                                "input": {"$map": {
+                                    "input": {"$range": [0, 3]},
+                                    "as": "i",
+                                    "in": {
+                                        "$pow": [
+                                            {"$subtract": [
+                                                {"$arrayElemAt": [player_coords, "$$i"]},
+                                                {"$arrayElemAt": ["$coordinates", "$$i"]}
+                                            ]},
+                                            2
+                                        ]
+                                    }
+                                }},
+                                "initialValue": 0,
+                                "in": {"$add": ["$$value", "$$this"]}
                             }
                         }
                     }
                 },
-                {"$sort": {"distance": 1}},
+                {"$sort": {"distSquared": 1}},
                 {"$limit": limit},
+
                 {
                     "$project": {
                         "_id": 0,
-                        # "name": 1,
-                        # "type": 1,
-                        "galMapSearch": 1
+                        "galMapSearch": 1,
+                        # "distance": {"$sqrt": "$distSquared"},
                     }
                 }
             ]
+            #
+            # pipeline = [
+            #     {"$match": query},
+            #     {
+            #         "$addFields": {
+            #             "distance": {
+            #                 "$sqrt": {
+            #                     "$add": [
+            #                         {"$pow": [{"$subtract": [player_coords[0], "$coordinates.0"]}, 2]},
+            #                         {"$pow": [{"$subtract": [player_coords[1], "$coordinates.1"]}, 2]},
+            #                         {"$pow": [{"$subtract": [player_coords[2], "$coordinates.2"]}, 2]}
+            #                     ]
+            #                 }
+            #             }
+            #         }
+            #     },
+            #     {"$sort": {"distance": 1}},
+            #     {"$limit": limit},
+            #     {
+            #         "$project": {
+            #             "_id": 0,
+            #             # "name": 1,
+            #             # "type": 1,
+            #             "galMapSearch": 1
+            #         }
+            #     }
+            # ]
 
             results = list(collection.aggregate(pipeline, allowDiskUse=True))
 
@@ -111,7 +162,7 @@ class POIChecker:
             return results
 
         except Exception as e:
-            print(f"Error finding nearest Interstellar Factors station: {e}")
+            print(f"Error getting system poi: {e}")
             return []
         finally:
             if client:

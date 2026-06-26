@@ -2,11 +2,80 @@ from pymongo import MongoClient
 from typing import Tuple, List, Optional
 
 class DBTools:
+    max_range = 200  # ly
+
+
+
+    def find_nearest_neutron(self,
+        player_coords: Tuple[float, float, float],  # (x, y, z)
+        limit: int = 5, current_system = "",
+    ) -> List[dict]:
+
+        db_name = "mongotest"
+        collection_name = "neutron_stars"
+        client = MongoClient("mongodb://localhost:27017/")
+
+        try:
+            collection = client[db_name][collection_name]
+            max_range = 1000  # ly
+
+            query = {
+                "coords.x": {
+                    "$gte": player_coords[0] - max_range,
+                    "$lte": player_coords[0] + max_range,
+                },
+                "coords.y": {
+                    "$gte": player_coords[1] - max_range,
+                    "$lte": player_coords[1] + max_range,
+                },
+                "coords.z": {
+                    "$gte": player_coords[2] - max_range,
+                    "$lte": player_coords[2] + max_range,
+                },
+                "name": {"$ne": current_system},
+            }
+
+            pipeline = [
+                {"$match": query},
+                {
+                    "$addFields": {
+                        "distance": {
+                            "$sqrt": {
+                                "$add": [
+                                    {"$pow": [{"$subtract": [player_coords[0], "$coords.x"]}, 2]},
+                                    {"$pow": [{"$subtract": [player_coords[1], "$coords.y"]}, 2]},
+                                    {"$pow": [{"$subtract": [player_coords[2], "$coords.z"]}, 2]}
+                                ]
+                            }
+                        }
+                    }
+                },
+                {"$sort": {"distance": 1}},
+                {"$limit": limit},
+                {
+                    "$project": {
+                        "_id": 0,
+                        "id64": 1,
+                        "name": 1,
+                        "coords": 1
+                    }
+                }
+            ]
+
+            results = list(collection.aggregate(pipeline, allowDiskUse=True))
+
+            return results
+
+        except Exception as e:
+            print(f"Error finding nearest neutron: {e}")
+            return []
+        finally:
+            if client:
+                client.close()
 
     def find_nearest(self,
         player_coords: Tuple[float, float, float],  # (x, y, z)
-        limit: int = 5,
-        service: str = "Refuel"
+        limit: int = 5, service: str = "Refuel"
     ) -> List[dict]:
         """
         Find the closest stations that offer 'Interstellar Factors Contact'.
@@ -35,13 +104,25 @@ class DBTools:
         try:
             collection = client[db_name][collection_name]
 
-            # Service filter
+            max_range = 1000  # ly
+
             query = {
-                "coords": {"$exists": True},
+                "coords.x": {
+                    "$gte": player_coords[0] - max_range,
+                    "$lte": player_coords[0] + max_range,
+                },
+                "coords.y": {
+                    "$gte": player_coords[1] - max_range,
+                    "$lte": player_coords[1] + max_range,
+                },
+                "coords.z": {
+                    "$gte": player_coords[2] - max_range,
+                    "$lte": player_coords[2] + max_range,
+                },
                 "type": {
                     "$in": ports
                 },
-                "otherServices": service  # Looks for exact match in array
+                "otherServices": service
             }
 
             pipeline = [
@@ -95,17 +176,17 @@ class DBTools:
 
     def find_nearest_rares(self,
         player_coords: Tuple[float, float, float],  # (x, y, z)
-        limit: int = 20,
+        limit: int = 10, current_system = ""
     ) -> List[dict]:
         """
-        Find the closest stations that offer 'Interstellar Factors Contact'.
-
+        Find the closest stations that stock rare commodities.
         Returns a list of stations sorted by distance (closest first).
         """
 
         db_name = "mongotest"
         collection_name = "stations"
         client = MongoClient("mongodb://localhost:27017/")
+        collection = client[db_name][collection_name]
 
         ports = [
             "Asteroid base",
@@ -118,17 +199,28 @@ class DBTools:
         ]
 
         try:
-            collection = client[db_name][collection_name]
 
-            # Service filter
+            max_range = 1000  # ly
+
             query = {
-                "coords": {"$exists": True},
+                "coords.x": {
+                    "$gte": player_coords[0] - max_range,
+                    "$lte": player_coords[0] + max_range,
+                },
+                "coords.y": {
+                    "$gte": player_coords[1] - max_range,
+                    "$lte": player_coords[1] + max_range,
+                },
+                "coords.z": {
+                    "$gte": player_coords[2] - max_range,
+                    "$lte": player_coords[2] + max_range,
+                },
                 "rareCommodities": "true",
                 "type": {
                     "$in": ports
                 },
+                "name": {"$nin": [current_system]},
             }
-
             pipeline = [
                 {"$match": query},
                 {

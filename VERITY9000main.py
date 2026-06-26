@@ -29,10 +29,12 @@ class Main:
 
         self.manager = Manager()
         self.shared_state = self.manager.dict()
-        self.shared_state.update({
-            "status": "running",
-            "first_run": True,
-        })
+        # self.shared_state.update({
+        #     "status": "running",
+        #     "first_run": True,
+        # })
+
+        self.shared_state["first_run"] = True
 
         self.shutdown_event = multiprocessing.Event()
 
@@ -42,6 +44,7 @@ class Main:
             "to_stt": Queue(),
             "to_tts": Queue(),
             "to_ev": Queue(),
+            "to_ev_initial": Queue(),
         }
 
         self.process_configs: List[ProcessConfig] = [
@@ -63,12 +66,12 @@ class Main:
             ProcessConfig(
                 name="JournalMonitorV2Q",
                 target_class=JournalMonitorV2Q,
-                queue_args=(self.queues["to_ev"], self.shutdown_event, self.shared_state)
+                queue_args=(self.queues["to_ev"], self.queues["to_ev_initial"], self.shutdown_event, self.shared_state)
             ),
             ProcessConfig(
                 name="JournalEventHandlerQ",
                 target_class=JournalEventHandlerQ,
-                queue_args=(self.queues["to_ev"], self.queues["to_tts"], self.shutdown_event, self.shared_state)
+                queue_args=(self.queues["to_ev"], self.queues["to_ev_initial"], self.queues["to_tts"], self.shutdown_event, self.shared_state)
             ),
             ProcessConfig(
                 name="GenerateTTSQ",
