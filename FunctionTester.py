@@ -48,8 +48,9 @@ def input_testing():
 
     # action.print_controls(test_controls)
 
-    # action.list_actions()
-    print(action.list_active_primary_keys())
+    action.print_active_keys()
+    # print(action.list_active_primary_keys())
+    # action.print_controls()
     # time.sleep(2)
     # action.request_docking()
     # action.do_action('DeployHeatSink')
@@ -340,8 +341,18 @@ def find_nearest_rares():
     from DBTools import DBTools
     db = DBTools()
     player_pos = (595.90625, -436.3125, -1211.21875)
-    stations = db.find_nearest_rares(player_pos)
+    stations = db.find_nearest_rares(player_coords=player_pos, limit=1, current_system="Sol")
     print(stations)
+
+
+def find_nearest_neutron():
+    from DBTools import DBTools
+    db = DBTools()
+    player_pos = (595.90625, -436.3125, -1211.21875)
+    neutrons = db.find_nearest_neutron(player_coords=player_pos, limit=1, current_system="Iwainch FG-Y g2")
+    print(neutrons)
+    print(neutrons[0]["name"])
+
 
 def text_fix():
     from bs4 import BeautifulSoup
@@ -375,7 +386,7 @@ def list_sound_devices():
 if __name__ == "__main__":
     # player_pos = (595.90625, -436.3125, -1211.21875)
 
-    # input_testing()
+    input_testing()
     # test_ollama()
 
     # ed = EDSM_API()
@@ -393,4 +404,5 @@ if __name__ == "__main__":
     # text_fix()
     # find_nearest_rares()
     # list_sound_devices()
-    status_testing()
+    # status_testing()
+    # find_nearest_neutron()

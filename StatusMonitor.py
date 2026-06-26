@@ -123,12 +123,13 @@ class StatusMonitor:
     """
 
     def __init__(self, to_llm: Queue, shutdown_event: Event, shared_state: dict):
-        self.Home_Station = "Csoma Ring"
-        self.Commander_Name = "Luthis"
         self.to_llm = to_llm
         self.shared = shared_state
         self.shutdown_event = shutdown_event
         self.poll_interval=1.0
+
+        self.shared["home_station"] = "Csoma Ring"
+        self.shared["commander_name"] = "Luthis"
 
     def run(self):
         print(f"status mon started")

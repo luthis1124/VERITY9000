@@ -258,6 +258,40 @@ GalaxyMapHome             | Key_Home
         return None
 
 
+    def print_active_keys(self):
+        """
+        Iterates through the bindings dictionary and prints the control name
+        and primary raw key only if the primary binding is not None.
+        """
+        # print(f"{'Control':<25} | {'Primary Raw Key':<20}")
+        print("-" * 48)
+        column = (f"{'Control':<25} | {'Primary Raw Key':<20} | {'secondary Raw Key':<20}\n")
+        column += ("-" * 48 + "\n")
+
+        raw_key = ''
+        sec_raw_key = ''
+        for control_name, data in self.bindings.items():
+            # Check if 'primary' exists in the dict and is not None
+            if data.get('primary') is not None:
+                # Get the raw key, defaulting to 'N/A' if missing for safety
+                raw_key = data.get('primary_raw', 'N/A')
+            else:
+                raw_key = ''
+            if data.get('secondary') is not None:
+                sec_raw_key = data.get('secondary_raw', 'N/A')
+            else:
+                sec_raw_key = ''
+
+            if raw_key or sec_raw_key:
+                # column += (f"{control_name:<25} | {raw_key:<20} | {sec_raw_key:<20}\n")
+                print(f"{control_name:<25} | {raw_key:<20} | {sec_raw_key:<20}")
+
+                # Print formatted output
+                # print(f"{control_name:<25} | {raw_key:<20}")
+
+        # print(column)
+        # return column
+
     def list_active_primary_keys(self) -> str:
         """
         Iterates through the bindings dictionary and prints the control name
