@@ -219,7 +219,7 @@ class DBTools:
                 "type": {
                     "$in": ports
                 },
-                "name": {"$nin": [current_system]},
+                "systemName": {"$nin": [current_system]},
             }
             pipeline = [
                 {"$match": query},
@@ -244,8 +244,22 @@ class DBTools:
                         "name": 1,
                         "systemName": 1,
                         "type": 1,
-                        "distanceToArrival": 1,
-                        "distance": 1,
+                        "distanceToArrival": {
+                            "$convert": {
+                                "input": "$distanceToArrival",
+                                "to": "int",
+                                "onError": 0,      # fallback value if conversion fails
+                                "onNull": 0
+                            }
+                        },
+                        "distance": {
+                            "$convert": {
+                                "input": "$distance",
+                                "to": "int",
+                                "onError": 0,
+                                "onNull": 0
+                            }
+                        },
                         "allegiance": 1,
                         "government": 1,
                         "economy": 1,
