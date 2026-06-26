@@ -30,8 +30,9 @@ class ToolRoute(str, Enum):
     SHIP = "SHIP"
     INFO = "INFO"
     NEUTRONS = "NEUTRONS"
-    STATIONSERVICES = "STATIONSERVICES"
+    STATION_SERVICES = "STATION_SERVICES"
     POINT_OF_INTEREST = "POINT_OF_INTEREST"
+    RARE_COMMODITIES = "RARE_COMMODITIES"
     NONE = "NONE"
 
 # BASIC_MODE = True
@@ -39,18 +40,17 @@ BASIC_MODE = False
 
 
 ROUTER_PROMPT = """
-You are a request classifier.
+You are a strict classifier for Elite Dangerous.
 
-The context is the video game Elite Dangerous.
-
-Classify the user's message into exactly one category.
+Classify the user input into EXACTLY ONE category. 
+Do NOT explain. Do NOT think out loud. Do NOT add any extra text.
 
 Possible categories:
 
 SHIP
 INFO
 NEUTRONS
-STATIONSERVICES
+STATION_SERVICES
 POINT_OF_INTEREST
 NONE
 
@@ -74,19 +74,44 @@ NEUTRONS
 - Used for finding efficient routes to star systems
 - Find nearest neutron star
 
-STATIONSERVICES
+RARE_COMMODITIES
+- Use this tool if user mentions:
+rare commodities
+commodities
+rare goods
+goods 
+- Used to find stations that sell rare commodities (rare goods)
+
+STATION_SERVICES
 - Used for finding the nearest station with the specified service
-- Interstellar Factor
-- Technology Broker
-- Material Trader
-- Universal Cartographics
-- Rare commodities
+Service names:
+Apex Interstellar Transport
+Bartender
+Black Market
+Contacts
+Crew Lounge
+Fleet carrier administration
+Fleet carrier vendor
+Frontline Solutions
+Interstellar Factors Contact
+Material Trader
+Missions
+Pioneer Supplies
+Refuel
+Repair
+Restock
+Search and Rescue
+Technology Broker
+Tuning
+Universal Cartographics
+Vista Genomics
 - etc (If the user asks for a station with some service, choose this tool)
 
 NONE
 - Fallback when input doesn't match a category and should not be processed.
-- provide reasoning for no matches
-"""
+
+Respond with valid JSON only and nothing else:
+{"category": "RARE_COMMODITIES"}"""
 #
 # Return ONLY the category name.
 # No explanations.
@@ -166,36 +191,73 @@ class OllamaRunnerQ:
     def select_tool(self, user_message: str) -> ToolRoute:
         response = self.client.chat(
             model="gemma2b:latest",
-
+            # model="gemma4-pc:latest",
+            # model="qwen3:4b",
             messages=[
                 {"role": "system", "content": ROUTER_PROMPT},
                 {"role": "user", "content": user_message},
             ],
+            # format={
+            #     "type": "string",
+            #     "enum": [
+            #         "SHIP",
+            #         "INFO",
+            #         "NEUTRONS",
+            #         "STATION_SERVICES",
+            #         "POINT_OF_INTEREST",
+            #         "RARE_COMMODITIES",
+            #         "NONE"
+            #     ]
+            # },
+            # options={
+            #     "temperature": 0.5,
+            #     "num_predict": 15 #3
+            # }
             format={
-                "type": "string",
-                "enum": [
-                    "SHIP",
-                    "INFO",
-                    "NEUTRONS",
-                    "STATIONSERVICES",
-                    "POINT_OF_INTEREST",
-                    "NONE"
-                ]
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "enum": ["SHIP", "INFO", "NEUTRONS", "STATION_SERVICES", "POINT_OF_INTEREST",
+                                 "RARE_COMMODITIES", "NONE"]
+                    }
+                },
+                "required": ["category"]
             },
             options={
-                "temperature": 0,
-                "num_predict": 10 #3
-            }
+                "temperature": 0.0,  # Very important for classification
+                "num_predict": 100,
+                "top_p": 0.9,
+            },
+            think=False
         )
 
         print("toolroute says " + str(response))
 
+        # try:
+        #     return ToolRoute(
+        #         response["message"]["content"].strip()
+        #     )
+        # except ValueError:
+        #     return ToolRoute.NONE
+
         try:
-            return ToolRoute(
-                response["message"]["content"].strip()
-            )
-        except ValueError:
-            return ToolRoute.NONE
+            content = response.message.content.strip()
+
+            # Parse JSON
+            data = json.loads(content)
+
+            # Extract category (support different possible key names)
+            category = data.get("category") or data.get("Category") or data.get("tool")
+
+            if category:
+                category = category.strip().upper()
+                return ToolRoute(category)  # This will raise ValueError if invalid
+
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+            pass  # Fall through to NONE
+
+        return ToolRoute.NONE
 
     def call_llm_tool(self, user_message):
         route = self.select_tool(user_message)
@@ -209,7 +271,9 @@ class OllamaRunnerQ:
                 self.Neutron()
             case ToolRoute.POINT_OF_INTEREST:
                 self.call_llm_poi(user_message)
-            case ToolRoute.STATIONSERVICES:
+            case ToolRoute.STATION_SERVICES:
+                self.call_llm_services(user_message)
+            case ToolRoute.RARE_COMMODITIES:
                 self.call_llm_services(user_message)
             case ToolRoute.NONE:
                 print("no llm action matched")
@@ -291,12 +355,10 @@ class OllamaRunnerQ:
             Repair
             Restock
             Search and Rescue
-            System colonisation
             Technology Broker
             Tuning
             Universal Cartographics
             Vista Genomics
-            colonisationcontribution
             """
 
             from DBTools import DBTools
@@ -304,6 +366,18 @@ class OllamaRunnerQ:
 
             player_pos = self.shared["star_pos"]
             stations = db.find_nearest(player_coords=player_pos, limit=4, service=service)
+
+            for i, station in enumerate(stations, 1):
+                if station.get('systemName'):
+                    import subprocess
+
+                    subprocess.run(
+                        ["wl-copy"],
+                        input=station.get('systemName'),
+                        text=True,
+                        check=True
+                    )
+                    break
 
             return stations
 
@@ -316,13 +390,29 @@ class OllamaRunnerQ:
             Returns a list of stations, distance to station, and system names.
             The user will not want to travel to stations with an arrival distance of greater than 100,000
 
+            Do not give full lightyear distance, round it to the nearest ones, and ignore any decimal places.
+
             """
             from DBTools import DBTools
             db = DBTools()
 
+            print("current system is: " + self.shared["system_name"])
             player_pos = self.shared["star_pos"]
             stations = db.find_nearest_rares(player_coords=player_pos, limit=10,
                                              current_system=self.shared["system_name"])
+
+            for i, station in enumerate(stations, 5):
+                print("checking system: " + str(station.get('systemName')))
+                if station.get('systemName'):
+                    import subprocess
+
+                    subprocess.run(
+                        ["wl-copy"],
+                        input=station.get('systemName'),
+                        text=True,
+                        check=True
+                    )
+                    break
 
             return stations
 
@@ -376,7 +466,7 @@ class OllamaRunnerQ:
         @tool
         def nearest_poi():
             """
-            Returns a list of the closest points of interest
+            Returns the nearest point of interest and distance in lightyears
             """
 
             from POIChecker import POIChecker
@@ -384,9 +474,19 @@ class OllamaRunnerQ:
 
             player_pos = self.shared["star_pos"]
             print("player pos: " + str(player_pos))
-            near = poi.get_nearest_poi(player_coords=player_pos, current_system=self.shared["system_name"])
+            near = poi.get_nearest_poi(player_coords=player_pos, limit=1, current_system=self.shared["system_name"])
 
-            print("pois found: " + str(near))
+            system_name = near[0]['galMapSearch']
+            print("poi found: " + str(near))
+
+            import subprocess
+
+            subprocess.run(
+                ["wl-copy"],
+                input=system_name,
+                text=True,
+                check=True
+            )
 
             return near
 

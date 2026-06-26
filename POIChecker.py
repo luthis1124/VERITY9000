@@ -70,6 +70,11 @@ class POIChecker:
                         }
                     }
                 },
+                {
+                    "$addFields": {
+                        "distance": {"$sqrt": "$distSquared"}
+                    }
+                },
                 {"$sort": {"distSquared": 1}},
                 {"$limit": limit},
 
@@ -77,6 +82,14 @@ class POIChecker:
                     "$project": {
                         "_id": 0,
                         "galMapSearch": 1,
+                        "distance": {
+                            "$convert": {
+                                "input": "$distance",
+                                "to": "int",
+                                "onError": 0,
+                                "onNull": 0
+                            }
+                        },
                         # "distance": {"$sqrt": "$distSquared"},
                     }
                 }

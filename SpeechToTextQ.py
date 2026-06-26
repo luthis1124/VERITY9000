@@ -14,19 +14,43 @@ class SpeechToTextQ:
         self.shutdown_event = shutdown_event
         self.name = "SpeechToTextQ"
 
+        # self.recorder = AudioToTextRecorder(
+        #     model="small.en",  # ← upgrade
+        #     language="en",
+        #     input_device_index=9,
+        #     sample_rate=16000,
+        #     compute_type="float16",  # if GPU
+        #     device="cuda",
+        #     silero_sensitivity=0.4,
+        #     webrtc_sensitivity=2,
+        #     post_speech_silence_duration=0.5,
+        #     min_length_of_recording=0.6,
+        #     pre_recording_buffer_duration=1.0,
+        #     normalize_audio=True,
+        #     faster_whisper_vad_filter=True,
+        #     beam_size=5,
+        #     # enable_realtime_transcription=True,  # optional
+        # )
         self.recorder = AudioToTextRecorder(
-            model="base",
-            # model="small",
+            # model="base",
+            model="small",
+            # model="medium.en",
             language="en",
             input_device_index=9,
             # sample_rate=TARGET_SR,
-            silero_sensitivity=0.2,
-            webrtc_sensitivity=1,
-            post_speech_silence_duration=0.2,
-            min_length_of_recording=0.4,
+            compute_type="float32",
+            # compute_type="float16",  # if GPU - tested no work
+            # compute_type="int8", #not working
+            # device="cuda", #not working
+            silero_sensitivity=0.4,
+            # webrtc_sensitivity=2,
+            silero_deactivity_detection=True,
+            post_speech_silence_duration=0.3,
+            min_length_of_recording=0.6,
             min_gap_between_recordings=0.2,
             enable_realtime_transcription=False,
-            compute_type="float32"
+            pre_recording_buffer_duration=1.0,  # keep more context before speech starts
+
         )
 
     def run(self):
