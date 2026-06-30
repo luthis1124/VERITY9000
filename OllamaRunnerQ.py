@@ -1,5 +1,7 @@
 from multiprocessing import Process, Queue, Event
 import multiprocessing
+
+from joblib.externals.loky import reusable_executor
 from langchain.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.checkpoint.memory import InMemorySaver
@@ -7,7 +9,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, System
 from langchain.agents import create_agent
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_chroma import Chroma
-from torch._export.passes import replace_with_hop_pass_util
+
+import time
 
 from InputControls import InputControls
 from ollama import Client
@@ -25,6 +28,64 @@ AIMessage(content='Deploying night vision now.', additional_kwargs={}, response_
 
 """
 
+# TODO: Test multiple layers of enum tool calls
+# TODO: Add pleasantries
+# TODO: Add a context timeout, allowing user to make further queries without going back to initial tool call
+# TODO: Ship status
+# TODO: vehicle specific commands
+# TODO: feed last AI and user input, and decide if user is responding or if new query (time based also)
+
+"""
+reduce numpredict
+write howto, requirements, deploy script, automatic db import / update
+
+error handling : alert for process failed, unable to api, timeouts for operations, 
+clean poi info table so no need for soup, add extra pois
+clean RAG text
+every 5 mins write out shared to file
+get length of log for initial, read until done, then mark first false (send "logs processed" to ev)
+separate initial event handler class?
+
+shared: jump range of current ship, weight calculations
+smart alert for no limpets
+ship module health check
+
+custom statuses for expectations + timeout timestamp:
+just undocked/docked, arrived at station, just landed, entered atmosphere, just sold / bought goods / just alerted poi
+
+"set a course for x" > automatic next jump
+
+"what should we do today"
+
+history prompt (for later) write to shared, important events / write out to session log
+get howto tips for adding to second RAG ie jameson crash site, materials (auto fill clipboard)
+status alerts: shield, fuel, hull, heat, gravity, altitude
+intelligent alerts: no cargo space, no heatsinks, planets/stars for bio, LandingGearDown, ("Supercruise", "In Supercruise"),
+
+market updates for each system
+set current task (ask where appropriate): materials gathering, bio signals, etc
+
+smart control definitions: hold button timeout, enter/exit supercruise, jump
+mouse tracking? altitude holding, aim up to escape
+
+
+
+status check : in buggy / ship / on foot / in trading ship / combat ship / explorer / has bounty / guardian site 
+self.shared["flags_decoded"]
+
+near poi check
+
+timeout / context response check (just asked where to buy x, where is service, poi) / ship controls / pleasantries
+status based: planet surface, on course, trading run, mat gathering
+neutron plotting / continue jump / nearest x > ?
+howto: guardian sites / mat gathering
+
+whereis: market queries / rare goods / ship modules / services
+ship status / general info / AI change
+
+
+"""
+
 
 class ToolRoute(str, Enum):
     SHIP = "SHIP"
@@ -33,11 +94,61 @@ class ToolRoute(str, Enum):
     STATION_SERVICES = "STATION_SERVICES"
     POINT_OF_INTEREST = "POINT_OF_INTEREST"
     RARE_COMMODITIES = "RARE_COMMODITIES"
+    MARKET_QUERIES = "MARKET_QUERIES"
+    SHIP_MODULES = "SHIP_MODULES"
+    SHIP_STATUS = "SHIP_STATUS"
+    AI_CHANGE = "AI_CHANGE"
+    PLEASANTRIES = "PLEASANTRIES"
     NONE = "NONE"
+
+class ToolRouteV2(str, Enum):
+    SHIP = "SHIP"
+    PLEASANTRIES = "PLEASANTRIES"
+    NEUTRONS = "NEUTRONS"
+    AI_CHANGE = "AI_CHANGE"
+
+    INFO = "INFO"
+    RARE_COMMODITIES = "RARE_COMMODITIES"
+    STATION_SERVICES = "STATION_SERVICES"
+
+    POINT_OF_INTEREST = "POINT_OF_INTEREST"
+    MARKET_QUERIES = "MARKET_QUERIES"
+    SHIP_STATUS = "SHIP_STATUS"
+
+    MARKET_GOODS = "MARKET_GOODS"
+    SHIP_MODULES = "SHIP_MODULES"
+
+    SHIP_ACTIONS = "SHIP_ACTIONS"
+    SHIP_POWER_FUNCTIONS = "SHIP_POWER_FUNCTIONS"
+    SHIP_FLIGHT_FUNCTIONS = "SHIP_FLIGHT_FUNCTIONS"
+
+    GET_NEAREST_NEUTRON = "GET_NEAREST_NEUTRON"
+    PLOT_A_ROUTE = "PLOT_A_ROUTE"
+
+    NONE = "NONE"
+
+    CATCH = "CATCH"
+
+LEVEL_1_CATEGORIES = ["SHIP", "PLEASANTRIES", "NEUTRONS", "AI_CHANGE", "NONE"]
+LEVEL_2_CATEGORIES = ["INFO", "RARE_COMMODITIES", "STATION_SERVICES", "NONE"]
+LEVEL_3_CATEGORIES = ["POINT_OF_INTEREST", "MARKET_QUERIES", "SHIP_STATUS", "NONE"]
+MARKET_CATEGORIES = ["SHIP_MODULES", "MARKET_GOODS", "NONE"]
+SHIP_CATEGORIES = ["SHIP_ACTIONS", "SHIP_POWER_FUNCTIONS", "SHIP_FLIGHT_FUNCTIONS", "SHIP_STATUS", "NONE"]
+NAVIGATION_CATEGORIES = ["GET_NEAREST_NEUTRON", "PLOT_A_ROUTE", "NONE"]
+
+ROUTING_STAGES = [
+    ("level_1", LEVEL_1_CATEGORIES),
+    ("level_2", LEVEL_2_CATEGORIES),
+    ("level_3", LEVEL_3_CATEGORIES),
+]
+TRANSITIONS = {
+    ToolRouteV2.SHIP: ("SHIP", SHIP_CATEGORIES),
+    ToolRouteV2.NEUTRONS: ("NAVIGATION", NAVIGATION_CATEGORIES),
+    ToolRouteV2.MARKET_QUERIES: ("MARKET", MARKET_CATEGORIES),
+}
 
 # BASIC_MODE = True
 BASIC_MODE = False
-
 
 ROUTER_PROMPT = """
 You are a strict classifier for Elite Dangerous.
@@ -112,11 +223,137 @@ NONE
 
 Respond with valid JSON only and nothing else:
 {"category": "RARE_COMMODITIES"}"""
-#
-# Return ONLY the category name.
-# No explanations.
-# No punctuation.
-# """
+
+ALL_DEFINITIONS = {
+    "SHIP": [
+        "Any ship control actions",
+        "throttle, supercruise, setspeedzero, ShipSpotLightToggle",
+        "cargo scoop, night vision, landing gear",
+    ],
+    "PLEASANTRIES": [
+        "Used ONLY to respond to greetings or statements from the player that DO NOT require taking any actions.",
+    ],
+    "AI_CHANGE": [
+        "Used when user wishes to change the behaviour of the AI",
+    ],
+    "NEUTRONS": [
+        "- Find nearest neutron star",
+        "- Used for finding efficient routes to star systems",
+    ],
+
+    "INFO": [
+        "General game info requests",
+        "game mechanics, explanations, game world info",
+        "Non-market requests",
+    ],
+    "RARE_COMMODITIES": [
+        "Use this tool if user mentions:",
+        "rare commodities",
+        "commodities",
+        "rare goods",
+        "goods",
+        "Used to find stations that sell rare commodities (rare goods)",
+    ],
+    "STATION_SERVICES": [
+        "Used for finding the nearest station with the specified service",
+        "Service names:",
+        "Apex Interstellar Transport",
+        "Bartender",
+        "Black Market",
+        "Contacts",
+        "Crew Lounge",
+        "Fleet carrier administration",
+        "Fleet carrier vendor",
+        "Frontline Solutions",
+        "Interstellar Factors Contact",
+        "Material Trader",
+        "Missions",
+        "Pioneer Supplies",
+        "Refuel",
+        "Repair",
+        "Restock",
+        "Search and Rescue",
+        "Technology Broker",
+        "Tuning",
+        "Universal Cartographics",
+        "Vista Genomics",
+    ],
+
+    "POINT_OF_INTEREST": [
+        "Finding nearby POIs",
+        "system scan results, signals, locations",
+    ],
+    "MARKET_QUERIES": [
+        "Used to find where things are sold, and for what prices",
+        "eg User asks 'where can I buy",
+    ],
+    "SHIP_STATUS": [
+        "Used to check ship status ie shields, cargo, etc"
+    ],
+
+    "MARKET_GOODS": [
+        "Used to find where goods are bought and sold, and for what prices",
+    ],
+    "SHIP_MODULES": [
+        "Used to find where ship modules are sold",
+    ],
+
+    "SHIP_ACTIONS": [
+        "Ship actions",
+        "- Call this tool with one of the controls below",
+        "DeployHeatSink - deploys a heatsink to counter high ship temps",
+        "NightVisionToggle",
+        "ShipSpotLightToggle",
+        "UseBoostJuice - boost (Refer to this only as Boost NOT Boost Juice)",
+        "SystemMapOpen",
+        "GalaxyMapOpen",
+        "ExplorationFSSEnter",
+        "Supercruise - enter or exit supercruise",
+        "DeployHardpointToggle",
+        "ToggleCargoScoop",
+        "LandingGearToggle",
+        "HyperSuperCombination - enter or exit supercruise, or start jump to next star",
+        "OrbitLinesToggle",
+    ],
+    "SHIP_POWER_FUNCTIONS": [
+        "- Power and ship system management",
+        "- Call this tool with one of the controls below",
+        "IncreaseEnginesPower",
+        "IncreaseWeaponsPower",
+        "IncreaseSystemsPower",
+        "ResetPowerDistribution",
+        "TargetNextRouteSystem",
+        "CycleFireGroupNext",
+        "FocusRightPanel",
+        "PlayerHUDModeToggle",
+    ],
+    "SHIP_FLIGHT_FUNCTIONS": [
+        "Ship flight controls",
+        "- Call this tool with one of the controls below",
+        "YawLeftButton",
+        "YawRightButton",
+        "LeftThrustButton - move horizontally left",
+        "RightThrustButton - move horizontally right",
+        "UpThrustButton - move vertically up",
+        "DownThrustButton - move vertically down",
+        "ForwardKey - increase thrust",
+        "BackwardKey - decrease thrust",
+        "SetSpeedZero",
+        "SetSpeed100",
+    ],
+
+    "GET_NEAREST_NEUTRON":[
+        "Find the nearest neutron star"
+    ],
+    "PLOT_A_ROUTE":[
+        "calculate a route to a destination"
+    ],
+
+    "NONE": [
+        "Use this if the input does not match any of the listed categories",
+        "This query will be forwarded to the next processor",
+    ],
+}
 
 class OllamaRunnerQ:
 
@@ -134,6 +371,11 @@ class OllamaRunnerQ:
 
         self.message_count = 0
         self.action = InputControls()
+
+        self.last_interaction_timestamp = time.monotonic()
+        self.last_tool_call = ''
+        self.last_user_message = ''
+        self.last_ai_message = ''
 
         base = self.system_prompts("base")
 
@@ -164,8 +406,33 @@ class OllamaRunnerQ:
 
         self.client = Client()
 
-        self.to_tts.put("loading AI")
+        self.HANDLERS = {
+            ToolRouteV2.PLEASANTRIES: self.handle_pleasantries,
+            ToolRouteV2.AI_CHANGE: self.handle_ai_change,
 
+            ToolRouteV2.INFO: self.handle_info,
+            ToolRouteV2.RARE_COMMODITIES: self.handle_rare_commodities,
+            ToolRouteV2.STATION_SERVICES: self.handle_station_services,
+
+            ToolRouteV2.POINT_OF_INTEREST: self.handle_poi,
+            ToolRouteV2.SHIP_STATUS: self.handle_ship_status,
+
+            ToolRouteV2.SHIP_ACTIONS: self.handle_ship_actions,
+            ToolRouteV2.SHIP_POWER_FUNCTIONS: self.handle_ship_power,
+            ToolRouteV2.SHIP_FLIGHT_FUNCTIONS: self.handle_ship_flight,
+
+            ToolRouteV2.GET_NEAREST_NEUTRON: self.handle_neutron,
+            ToolRouteV2.PLOT_A_ROUTE: self.handle_route,
+        }
+        print("testing")
+        self.route("where is the nearest neutron star?")
+        self.route("where can I buy rare goods?") #gave INFO
+        self.route("what is the ship cargo?")
+        self.route("Give me a history of the thargoids")
+        self.route("engage supercruise")
+        self.route("turn on the lights")
+
+        self.to_tts.put("loading AI")
 
     def run(self):
         print(f"[{self.name}] Process started (PID: {multiprocessing.current_process().pid})")
@@ -177,9 +444,11 @@ class OllamaRunnerQ:
                     if request:
                         if BASIC_MODE:
                             print("basic mode call")
+                            self.last_interaction_timestamp = time.monotonic()
                             self.call_llm_chat(request)
                         else:
                             # self.call_llm_advanced(request)
+                            self.last_interaction_timestamp = time.monotonic()
                             self.call_llm_tool(request)
 
                 except Exception as e:
@@ -197,22 +466,6 @@ class OllamaRunnerQ:
                 {"role": "system", "content": ROUTER_PROMPT},
                 {"role": "user", "content": user_message},
             ],
-            # format={
-            #     "type": "string",
-            #     "enum": [
-            #         "SHIP",
-            #         "INFO",
-            #         "NEUTRONS",
-            #         "STATION_SERVICES",
-            #         "POINT_OF_INTEREST",
-            #         "RARE_COMMODITIES",
-            #         "NONE"
-            #     ]
-            # },
-            # options={
-            #     "temperature": 0.5,
-            #     "num_predict": 15 #3
-            # }
             format={
                 "type": "object",
                 "properties": {
@@ -260,7 +513,13 @@ class OllamaRunnerQ:
         return ToolRoute.NONE
 
     def call_llm_tool(self, user_message):
+
+        if (time.monotonic() - self.last_interaction_timestamp) < 60:
+            #in context window
+            pass
         route = self.select_tool(user_message)
+
+        self.last_tool_call = route
 
         match route:
             case ToolRoute.SHIP:
@@ -678,6 +937,323 @@ class OllamaRunnerQ:
         # return [ship_functions, ai_learning_and_interactions, find_neutron_star]
 
         return [ship_functions, flight_functions]
+
+
+    def route(self, user_message: str):
+        """Main routing entry point with hierarchical fallback."""
+        levels = ["level_1", "level_2", "level_3"]  # easy to extend
+
+        for stage_name in levels:
+            route = self.run_stage(user_message, stage_name)
+            result = self._handle_route(user_message, route)
+            print("user asks: " + user_message)
+            print("result is: " + str(result))
+            print("route is: " + str(route))
+            if result is not None:
+                print("ending chain")
+                return result
+            print("moving up the chain")
+
+        print("couldn't find a route!")
+        return None
+
+    def _handle_route(self, user_message: str, route: ToolRouteV2) -> ToolRouteV2:
+        """Handle both transition (sub-router) cases and direct routes."""
+        if route in TRANSITIONS:
+
+            namespace, subcats = TRANSITIONS[route]
+            print("transition chain: " + str(namespace) + " : " + str(subcats) + " for query: " + user_message)
+            definitions = self.select_definitions(ALL_DEFINITIONS, subcats)
+            prompt = self._build_router_prompt(subcats, definitions, self._get_recent_interaction())
+            sub_route = self.tool_chain_llm_call(user_message, prompt)
+            print("got sub route " + sub_route)
+            return self.dispatch(user_message, sub_route)
+
+        if route != ToolRouteV2.NONE:
+            print("has route: " + route + " for query: " + user_message)
+            return self.dispatch(user_message, route)
+
+        print("route not found, ending handle route"  + " for query: " + user_message)
+        return None  # continue to next level
+
+    def route_z(self, user_message: str):
+        # Level 1
+        route = self.run_stage(user_message, "level_1")
+
+        if route in TRANSITIONS:
+            namespace, subcats = TRANSITIONS[route]
+            definitions = self.select_definitions(ALL_DEFINITIONS, subcats)
+
+            recent = self._get_recent_interaction()
+            prompt = self.build_router_prompt(subcats, definitions, recent) if recent else \
+                self.build_router_prompt(subcats, definitions)
+
+            sub_route = self.tool_chain_llm_call(user_message, prompt)
+            return self.dispatch(user_message, sub_route)
+
+        # Fallback chain only on NONE
+        if route != ToolRouteV2.NONE:
+            return self.dispatch(user_message, route)
+
+        # Level 2
+        route = self.run_stage(user_message, "level_2")
+        if route != ToolRouteV2.NONE:
+            return self.dispatch(user_message, route)
+
+        # Level 3
+        route = self.run_stage(user_message, "level_3")
+        if route == ToolRouteV2.MARKET_QUERIES:
+            route = self.route_market(user_message)
+
+        return self.dispatch(user_message, route)
+
+    def route_y(self, user_message: str):
+        route = self.run_stage(user_message, "level_1")
+
+        if route in TRANSITIONS:
+            namespace, subcats = TRANSITIONS[route]
+            definitions = self.select_definitions(ALL_DEFINITIONS,subcats)
+
+            recent = self._get_recent_interaction()
+            prompt = self.build_router_prompt(subcats, definitions, recent) if recent else \
+                self.build_router_prompt(subcats, definitions)
+
+            sub_route = self.tool_chain_llm_call(user_message,prompt)
+            return self.dispatch(user_message, sub_route)
+
+        if route != ToolRouteV2.NONE:
+            return self.dispatch(user_message, route)
+
+        #check level 2
+        if route == ToolRouteV2.NONE:
+
+            route = self.run_stage(user_message, "level_2")
+
+            if route in TRANSITIONS:
+                namespace, subcats = TRANSITIONS[route]
+                definitions = self.select_definitions(ALL_DEFINITIONS, subcats)
+
+                recent = self._get_recent_interaction()
+                prompt = self.build_router_prompt(subcats, definitions, recent) if recent else \
+                    self.build_router_prompt(subcats, definitions)
+
+                sub_route = self.tool_chain_llm_call(user_message, prompt)
+                return self.dispatch(user_message, sub_route)
+
+            if route != ToolRouteV2.NONE:
+                return self.dispatch(user_message, route)
+
+            if route == ToolRouteV2.NONE:
+                route = self.run_stage(user_message, "level_3")
+
+                if route in TRANSITIONS:
+                    namespace, subcats = TRANSITIONS[route]
+                    definitions = self.select_definitions(ALL_DEFINITIONS, subcats)
+
+                    recent = self._get_recent_interaction()
+                    prompt = self.build_router_prompt(subcats, definitions, recent) if recent else \
+                        self.build_router_prompt(subcats, definitions)
+
+                    sub_route = self.tool_chain_llm_call(user_message, prompt)
+                    return self.dispatch(user_message, sub_route)
+
+                if route != ToolRouteV2.NONE:
+                    return self.dispatch(user_message, route)
+                else:
+                    print("couldn't find a route!")
+        return None
+
+    def run_stage(self, user_message: str, stage_name: str) -> ToolRouteV2:
+        categories = dict(ROUTING_STAGES)[stage_name]
+        definitions = self.select_definitions(ALL_DEFINITIONS, categories)
+        print("run stage for " + str(categories) + " " + str(definitions) + " " + " for query: " + user_message)
+        prompt = self._build_router_prompt(categories, definitions, self._get_recent_interaction())
+        return self.tool_chain_llm_call(user_message, prompt)
+
+    def _get_recent_interaction(self):
+        if time.monotonic() - self.last_interaction_timestamp < 60:
+            return self.build_recent_interaction(
+                self.last_user_message, self.last_ai_message, self.last_tool_call
+            )
+        return None
+
+    def _build_router_prompt(self, categories, definitions, recent=None):
+        if recent:
+            return self.build_router_prompt(categories, definitions, recent)
+        return self.build_router_prompt(categories, definitions)
+
+    def dispatch(self, user_message: str, route: ToolRouteV2) -> ToolRouteV2:
+        print("dispatching, final call to: " + str(route) + " for query: " + user_message)
+        self.last_tool_call = route
+        self.last_user_message = user_message
+        self.last_interaction_timestamp = time.monotonic()
+
+        handler = self.HANDLERS.get(route)
+
+        # print(f"DEBUG: Route = {route}")
+        print(f"DEBUG: Handler found = {handler}")
+
+        if handler is None:
+            print("no handler, going to unknown"  + " for query: " + user_message)
+            return self.handle_unknown(user_message, route)
+
+
+        return handler(user_message)
+
+    def dispatch_x(self, user_message: str, route: ToolRouteV2):
+        self.last_tool_call = route
+        self.last_user_message = user_message
+        self.last_interaction_timestamp = time.monotonic()
+
+        handler = self.HANDLERS.get(route)
+
+        if handler is None:
+            return self.handle_unknown(user_message, route)
+
+        try:
+            return handler(user_message)
+        except Exception as e:
+            print(f"Error in handler {route}: {e}")
+            return self.handle_unknown(user_message, route)
+
+    def handle_unknown(self, user_message, route):
+        print("handling unknown")
+        return ToolRouteV2.CATCH
+
+    def handle_pleasantries(self, user_message: str):
+        print("handling hi")
+        return ToolRouteV2.PLEASANTRIES
+
+    def handle_ai_change(self, user_message: str):
+        print("handling ai")
+        return ToolRouteV2.AI_CHANGE
+
+    def handle_info(self, user_message: str):
+        print("handling info")
+        return ToolRouteV2.INFO
+
+    def handle_rare_commodities(self, user_message: str):
+        print("handling rares")
+        return ToolRouteV2.RARE_COMMODITIES
+
+    def handle_station_services(self, user_message: str):
+        print("handling services")
+        return ToolRouteV2.STATION_SERVICES
+
+    def handle_poi(self, user_message: str):
+        print("handling poi")
+        return ToolRouteV2.POINT_OF_INTEREST
+
+    def handle_ship_status(self, user_message: str):
+        print("handling status")
+        return ToolRouteV2.SHIP_STATUS
+
+    def handle_ship_actions(self, user_message: str):
+        print("handling actions")
+        return ToolRouteV2.SHIP_ACTIONS
+
+    def handle_ship_power(self, user_message: str):
+        print("handling power")
+        return ToolRouteV2.SHIP_POWER_FUNCTIONS
+
+    def handle_ship_flight(self, user_message: str):
+        print("handling flight")
+        return ToolRouteV2.SHIP_FLIGHT_FUNCTIONS
+
+    def handle_neutron(self, user_message: str):
+        print("handling neutron")
+        return ToolRouteV2.NEUTRONS
+
+    def handle_route(self, user_message: str):
+        print("handling route")
+        return ToolRouteV2.PLOT_A_ROUTE
+
+    def tool_chain_llm_call(self, user_message: str, prompt) -> ToolRouteV2:
+        response = self.client.chat(
+            model="gemma2b:latest",
+            # model="gemma4-pc:latest",
+            # model="qwen3:4b",
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_message},
+            ],
+            format={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "enum": ["SHIP", "PLEASANTRIES", "INFO", "NEUTRONS", "AI_CHANGE", "STATION_SERVICES", "POINT_OF_INTEREST",
+                                 "MARKET_QUERIES", "SHIP_STATUS", "MARKET_GOODS", "SHIP_MODULES", "RARE_COMMODITIES",
+                                 "SHIP_ACTIONS", "SHIP_POWER_FUNCTIONS", "SHIP_FLIGHT_FUNCTIONS", "GET_NEAREST_NEUTRON",
+                                 "PLOT_A_ROUTE", "NONE"]
+                    }
+                },
+                "required": ["category"]
+            },
+            options={
+                "temperature": 0.0,
+                "num_predict": 100,
+                "top_p": 0.9,
+            },
+            think=False
+        )
+
+        # print("toolroute says " + str(response))
+
+        try:
+            content = response.message.content.strip()
+            data = json.loads(content)
+
+            category = data.get("category") or data.get("Category") or data.get("tool")
+
+            if category:
+                category = category.strip().upper()
+                return ToolRouteV2(category)  # This will raise ValueError if invalid
+
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+            pass  # Fall through to NONE
+
+        return ToolRouteV2.NONE
+
+    def select_definitions(self,
+            definitions: dict[str, list[str]], selected_categories: list[str]) -> dict[str, list[str]]:
+        return {
+            key: definitions[key]
+            for key in selected_categories
+            if key in definitions
+        }
+
+    def build_recent_interaction(self, user_input, ai_output, last_tool):
+        return f"""NOTE: The interaction below just occurred, the user may want to clarify or give further related instruction:
+            User input: {user_input or "None"}
+            AI response: {ai_output or "None"}
+            Tool called: {last_tool or "None"}"""
+
+    def build_router_prompt(self, categories: list[str], definitions: dict[str, list[str]], context: str = '') -> str:
+
+        category_text = "\n".join(categories)
+
+        definition_text = "\n\n".join(
+            f"{name}\n" + "\n".join(f"- {line}" for line in lines)
+            for name, lines in definitions.items()
+        )
+
+        return f"""
+            You are a strict classifier for Elite Dangerous.
+        
+            Classify the user input into EXACTLY ONE category.
+            Do NOT explain. Do NOT think out loud. Do NOT add any extra text.
+        
+            Possible categories:
+        
+            {category_text}
+        
+            Definitions:
+        
+            {definition_text}
+            
+            {context}
+            """.strip()
 
     def call_llm_advanced(self, user_input: str):
 

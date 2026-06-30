@@ -1,6 +1,9 @@
 from pymongo import MongoClient
 from typing import Tuple, List, Optional
 
+
+# TODO: use API to update DB when making calls
+
 class DBTools:
     max_range = 200  # ly
 

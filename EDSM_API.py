@@ -5,6 +5,10 @@ from typing import Dict, Any, Optional
 
 class EDSM_API:
 
+    def check_dangerous_system(self):
+        # https://www.edsm.net/api-system-v1/deaths
+        pass
+
     def get_edsm_system(self, system_name):
         """
         Query EDSM API for system information.

@@ -1,3 +1,5 @@
+
+
 class RareCommodityChecker:
     def __init__(self):
 

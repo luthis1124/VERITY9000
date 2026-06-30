@@ -1,8 +1,12 @@
 import json
 from multiprocessing import Queue, Event
 import time
+from PlayAudioFile import PlayAudioFile
+
 
 STATUS_FILE='/media/ssd/SteamLibrary/steamapps/compatdata/359320/pfx/drive_c/users/steamuser/Saved Games/Frontier Developments/Elite Dangerous/Status.json'
+
+# TODO: sent significant events to LLM (separate queue)
 
 class Statest:
 
@@ -14,7 +18,7 @@ class Statest:
         with open(filename, "r") as file:
             data = json.load(file)
 
-        self.shared["status_update"] = data
+        self.shared["status_file"] = data
         print(self.shared)
 
     def decode_flags(self, flags_value: int) -> dict:
@@ -24,7 +28,41 @@ class Statest:
             flags_value (int): The Flags value from the Status event (e.g. 150994952)
         Returns:
             dict: Dictionary with active flags and their descriptions
+
+            Active Flags:
+           • ShieldsUp            : Shields are active
+           • InMainShip           : Currently in main ship
+           • AnalysisMode         : HUD in Analysis mode
         """
+
+        important_flags = {
+            "Docked": "On a landing pad",
+            "Landed": "On planet surface",
+            "LandingGearDown": "Landing gear is down",
+            "ShieldsUp": "Shields are active",
+            "Supercruise": "In Supercruise",
+            "HardpointsDeployed": "Hardpoints are deployed",
+            "LightsOn": "Ship lights are on",
+            "CargoScoopDeployed": "Cargo scoop is deployed",
+            "ScoopingFuel": "Scooping fuel",
+            "FsdMassLocked": "FSD Mass Locked",
+            "FsdCharging": "FSD is charging",
+            "FsdCooldown": "FSD in cooldown",
+            "LowFuel": "Fuel below 25%",
+            "OverHeating": "Ship overheating (>100%)",
+            "HasLatLong": "in planet atmosphere with latitude/longitude",
+            "IsInDanger": "In danger / under attack",
+            "BeingInterdicted": "Being interdicted",
+            "InMainShip": "Currently in main ship",
+            "InFighter": "Currently in fighter",
+            "InSRV": "Currently in SRV",
+            "AnalysisMode": "HUD in Analysis mode",
+            "NightVision": "Night Vision active",
+            "AltitudeFromAverage": "Altitude from average radius",
+            "FsdJump": "Currently performing FSD Jump",
+            "SrvHighBeam": "SRV High Beam lights on",
+        }
+
 
         flag_definitions = {
             0: ("Docked", "On a landing pad"),
@@ -66,7 +104,11 @@ class Statest:
         for bit, (short_name, description) in flag_definitions.items():
             mask = 1 << bit
             if flags_value & mask:
+
                 active_flags[short_name] = description
+
+        self.shared.setdefault("flags_decoded", [])
+        self.shared["flags_decoded"] = active_flags
 
         return active_flags
 
@@ -115,11 +157,26 @@ class Statest:
 
         print("GuiFocus:", self.decode_gui_focus(status["GuiFocus"]))
 
+        print(self.shared)
+
+        # example_flags = 153157640
+        example_flags = 1
+        self.decode_flags(example_flags)
+        print(self.shared)
+
+
 class StatusMonitor:
     """
     maintains the player state from the status json
     https://elite-journal.readthedocs.io/en/latest/Status%20File.html
     https://edcodex.info/?m=doc
+
+    { "timestamp":"2026-06-16T06:18:46Z", "event":"Status", "Flags":153157640, "Flags2":0, "Pips":[4,8,0], "FireGroup":0, "GuiFocus":0,
+    "Fuel":{ "FuelMain":87.419518, "FuelReservoir":0.864385 }, "Cargo":0.000000, "LegalState":"Clean",
+    "Latitude":34.901585, "Longitude":71.426796, "Heading":321, "Altitude":66, "BodyName":"Phylur UW-G b12-0 ABC 2 c",
+    "PlanetRadius":927530.625000, "Balance":5402295250,
+    "Destination":{ "System":637938182249, "Body":31, "Name":"Phylur UW-G b12-0 ABC 2 c" } }
+
     """
 
     def __init__(self, to_llm: Queue, shutdown_event: Event, shared_state: dict):
@@ -127,7 +184,7 @@ class StatusMonitor:
         self.shared = shared_state
         self.shutdown_event = shutdown_event
         self.poll_interval=1.0
-
+        self.ap = PlayAudioFile()
         self.shared["home_station"] = "Csoma Ring"
         self.shared["commander_name"] = "Luthis"
 
@@ -138,7 +195,7 @@ class StatusMonitor:
                 try:
                     with open(STATUS_FILE, "r") as file:
                         data = json.load(file)
-                    self.shared["status_update"] = data
+                    self.shared["status_file"] = data
 
                 except Exception as e:
                     pass
@@ -148,17 +205,16 @@ class StatusMonitor:
             print(f"statusmon Error: {e}")
 
     def print_values(self):
-        print(self.shared["status_update"].get("timestamp"))
-        print(self.shared["status_update"].get("event"))
-        print(self.shared["status_update"].get("Flags"))
-        print(self.shared["status_update"].get("Latitude"))
-        print(self.shared["status_update"].get("Longitude"))
-
-    def set_home_station(self, home: str):
-        if home:
-            self.Home_Station = home
-    def get_home_station(self) -> str:
-        return self.Home_Station
+        print(self.shared["status_file"].get("timestamp"))
+        print(self.shared["status_file"].get("event"))
+        print(self.shared["status_file"].get("Flags"))
+        print(self.shared["status_file"].get("Latitude"))
+        print(self.shared["status_file"].get("Longitude"))
+        print(self.shared["status_file"].get("Heading"))
+        print(self.shared["status_file"].get("Altitude"))
+        print(self.shared["status_file"].get("BodyName"))
+        print(self.shared["status_file"].get("PlanetRadius"))
+        print(self.shared["status_file"].get("Destination"))
 
     def decode_gui_focus(self, gui_focus_value: int) -> str:
 
@@ -228,12 +284,46 @@ class StatusMonitor:
             31: ("SrvHighBeam", "SRV High Beam lights on"),
         }
 
+        important_flags = {
+            "Docked": "On a landing pad",
+            "Landed": "On planet surface",
+            "LandingGearDown": "Landing gear is down",
+            "ShieldsUp": "Shields are active",
+            "Supercruise": "In Supercruise",
+            "HardpointsDeployed": "Hardpoints are deployed",
+            "LightsOn": "Ship lights are on",
+            "CargoScoopDeployed": "Cargo scoop is deployed",
+            "ScoopingFuel": "Scooping fuel",
+            "FsdMassLocked": "FSD Mass Locked",
+            "FsdCharging": "FSD is charging",
+            "FsdCooldown": "FSD in cooldown",
+            "LowFuel": "Fuel below 25%",
+            "OverHeating": "Ship overheating (>100%)",
+            "HasLatLong": "in planet atmosphere with latitude/longitude",
+            "IsInDanger": "In danger / under attack",
+            "BeingInterdicted": "Being interdicted",
+            "InMainShip": "Currently in main ship",
+            "InFighter": "Currently in fighter",
+            "InSRV": "Currently in SRV",
+            "AnalysisMode": "HUD in Analysis mode",
+            "NightVision": "Night Vision active",
+            "AltitudeFromAverage": "Altitude from average radius",
+            "FsdJump": "Currently performing FSD Jump",
+            "SrvHighBeam": "SRV High Beam lights on",
+        }
+
         active_flags = {}
 
         for bit, (short_name, description) in flag_definitions.items():
             mask = 1 << bit
             if flags_value & mask:
+                if short_name == "LowFuel" and not self.shared["major_warning_given"]:
+                    self.ap.major_fuel_alert()
+                    self.shared["major_warning_given"] = True
                 active_flags[short_name] = description
+
+        self.shared.setdefault("flags_decoded", [])
+        self.shared["flags_decoded"] = active_flags
 
         return active_flags
 

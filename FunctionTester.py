@@ -403,6 +403,6 @@ if __name__ == "__main__":
     # poi_test()
     # text_fix()
     # find_nearest_rares()
-    list_sound_devices()
-    # status_testing()
+    # list_sound_devices()
+    status_testing()
     # find_nearest_neutron()

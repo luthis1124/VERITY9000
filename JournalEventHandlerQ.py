@@ -7,6 +7,7 @@ from InputControls import InputControls
 from POIChecker import POIChecker
 from PlayAudioFile import PlayAudioFile
 
+# TODO: poi alerts based on type (are guardian / thargoid sites imported yet?)
 
 class JournalEventHandlerQ:
 
@@ -15,7 +16,6 @@ class JournalEventHandlerQ:
         self.to_ev_initial = to_ev_initial
         self.to_tts = to_tts
         self.shutdown_event = shutdown_event
-        self.fuel_warning_given = False
         self.latest_events = {}
         self.ap = PlayAudioFile()
         self.shared = shared_state
@@ -151,7 +151,10 @@ class JournalEventHandlerQ:
                 body_audio = "Arriving at " + str(body)
                 self.to_tts.put(body_audio)
 
+
                 if body == self.shared["home_station"]:
+                    print("welcome home")
+                    time.sleep(5)
                     self.ap.welcome_home()
 
             case "ApproachBody":
@@ -159,10 +162,12 @@ class JournalEventHandlerQ:
                 approach = "Arriving at body " + str(bodyid)
                 self.to_tts.put(approach)
 
+
             case "ApproachSettlement":
                 settlement = data.get('Name', 'Unknown')
                 approachsettlement = settlement
                 self.to_tts.put(approachsettlement)
+
 
             case "Music":
                 musictype = data.get('MusicTrack', '')
@@ -210,6 +215,7 @@ class JournalEventHandlerQ:
 
     def on_system_enter(self, StarSystem: str):
 
+        print("entered system: " + StarSystem)
         self.shared.setdefault("visited_systems", []).append(StarSystem)
 
         jumpinfo = "System " + StarSystem
@@ -219,25 +225,20 @@ class JournalEventHandlerQ:
         fuelcap = self.shared["fuel_capacity"]
 
         if fuelcap / level < 2.0:
-            self.fuel_warning_given = False
+            # self.fuel_warning_given = False
+            self.shared["fuel_warning_given"] = False
+            self.shared["major_warning_given"] = False
 
-        elif fuelcap / level > 2.0 and not self.fuel_warning_given:
-            self.fuel_warning_given = True
+        elif fuelcap / level > 2.0 and not self.shared["fuel_warning_given"]:
+            # self.fuel_warning_given = True
+            self.shared["fuel_warning_given"] = True
             time.sleep(5)
-
             self.ap.fuel_alert()
-
-        elif fuelcap / level > 4.0:
-            time.sleep(5)
-
-            self.ap.major_fuel_alert()
-
 
         tc = ThreatChecker()
         if tc.is_dangerous(StarSystem):
             time.sleep(5)
             self.ap.high_threat()
-
 
         rc = RareCommodityChecker()
         result = rc.check(StarSystem)
