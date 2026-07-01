@@ -136,7 +136,9 @@ class POIChecker:
     def check_system(self, current_system: str):
 
         if not current_system:
+            print("no system received")
             return None
+        print("checking db for poi: " + current_system)
 
         db_name = "mongotest"
         collection_name = "poi-1"
@@ -165,14 +167,22 @@ class POIChecker:
 
             results = list(collection.aggregate(pipeline, allowDiskUse=True))
 
+            cleaned = ''
+
             if results:
                 for poi in results:
                     soup = BeautifulSoup(poi["name"], "html.parser")
                     poi["name"] = soup.get_text(separator=" ", strip=True)
                     soup = BeautifulSoup(poi["descriptionHtml"], "html.parser")
                     poi["descriptionHtml"] = soup.get_text(separator=" ", strip=True)
+                    cleaned += poi["name"] + ". " + poi["descriptionHtml"]
 
-            return results
+            # if poi_result:
+            #     for poi in poi_result:
+            #         poi_message = poi["name"] + ". " + poi["descriptionHtml"]
+            #         poi_info += poi_message
+            #
+            return cleaned
 
         except Exception as e:
             print(f"Error getting system poi: {e}")

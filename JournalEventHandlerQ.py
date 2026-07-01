@@ -199,6 +199,7 @@ class JournalEventHandlerQ:
             case "Location":
                 print("found location")
                 self.shared["system_name"] = (data.get('StarSystem', 'Unknown'))
+                print("found location: " + self.shared["system_name"])
                 self.shared["system_address"] = (data.get('SystemAddress', ''))
                 self.shared["star_pos"] = (data.get('StarPos', ''))
                 self.shared["system_alliegance"] = (data.get('SystemAllegiance', ''))
@@ -252,6 +253,7 @@ class JournalEventHandlerQ:
             if system not in self.shared["visited_rare_goods"]:
                 self.shared["visited_rare_goods"].append(system)
 
+        # I don't think it returns multiple results, only a single string for pois now
         poi = POIChecker()
         poi_result = poi.check_system(StarSystem)
         self.shared["system_poi"] = poi_result
