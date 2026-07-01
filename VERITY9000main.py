@@ -48,11 +48,11 @@ class Main:
         }
 
         self.process_configs: List[ProcessConfig] = [
-            # ProcessConfig(
-            #     name="SpeechToTextQ",
-            #     target_class=SpeechToTextQ,
-            #     queue_args=(self.queues["to_vci"], self.shutdown_event)
-            # ),
+            ProcessConfig(
+                name="SpeechToTextQ",
+                target_class=SpeechToTextQ,
+                queue_args=(self.queues["to_vci"], self.shutdown_event)
+            ),
             ProcessConfig(
                 name="OllamaRunnerQ",
                 target_class=OllamaRunnerQ,
@@ -63,11 +63,11 @@ class Main:
                 target_class=VoiceCommandInterceptQ,
                 queue_args=(self.queues["to_vci"], self.queues["to_llm"], self.queues["to_tts"], self.shutdown_event, self.shared_state)
             ),
-            # ProcessConfig(
-            #     name="JournalMonitorV2Q",
-            #     target_class=JournalMonitorV2Q,
-            #     queue_args=(self.queues["to_ev"], self.queues["to_ev_initial"], self.shutdown_event, self.shared_state)
-            # ),
+            ProcessConfig(
+                name="JournalMonitorV2Q",
+                target_class=JournalMonitorV2Q,
+                queue_args=(self.queues["to_ev"], self.queues["to_ev_initial"], self.shutdown_event, self.shared_state)
+            ),
             ProcessConfig(
                 name="JournalEventHandlerQ",
                 target_class=JournalEventHandlerQ,

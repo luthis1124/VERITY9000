@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, System
 from langchain.agents import create_agent
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_chroma import Chroma
+from POIChecker import POIChecker
 
 import time
 
@@ -86,21 +87,6 @@ ship status / general info / AI change
 
 """
 
-
-class ToolRoute(str, Enum):
-    SHIP = "SHIP"
-    INFO = "INFO"
-    NEUTRONS = "NEUTRONS"
-    STATION_SERVICES = "STATION_SERVICES"
-    POINT_OF_INTEREST = "POINT_OF_INTEREST"
-    RARE_COMMODITIES = "RARE_COMMODITIES"
-    MARKET_QUERIES = "MARKET_QUERIES"
-    SHIP_MODULES = "SHIP_MODULES"
-    SHIP_STATUS = "SHIP_STATUS"
-    AI_CHANGE = "AI_CHANGE"
-    PLEASANTRIES = "PLEASANTRIES"
-    NONE = "NONE"
-
 class ToolRouteV2(str, Enum):
     SHIP = "SHIP"
     PLEASANTRIES = "PLEASANTRIES"
@@ -130,8 +116,8 @@ class ToolRouteV2(str, Enum):
     CATCH = "CATCH"
 
 LEVEL_1_CATEGORIES = ["SHIP", "PLEASANTRIES", "NEUTRONS", "AI_CHANGE", "NONE"]
-LEVEL_2_CATEGORIES = ["INFO", "RARE_COMMODITIES", "STATION_SERVICES", "NONE"]
-LEVEL_3_CATEGORIES = ["POINT_OF_INTEREST", "MARKET_QUERIES", "SHIP_STATUS", "NONE"]
+LEVEL_2_CATEGORIES = ["POINT_OF_INTEREST", "RARE_COMMODITIES", "STATION_SERVICES", "NONE"]
+LEVEL_3_CATEGORIES = ["INFO", "MARKET_QUERIES", "SHIP_STATUS", "NONE"]
 MARKET_CATEGORIES = ["SHIP_MODULES", "MARKET_GOODS", "NONE"]
 SHIP_CATEGORIES = ["SHIP_ACTIONS", "SHIP_POWER_FUNCTIONS", "SHIP_FLIGHT_FUNCTIONS", "SHIP_STATUS", "NONE"]
 NAVIGATION_CATEGORIES = ["GET_NEAREST_NEUTRON", "PLOT_A_ROUTE", "NONE"]
@@ -147,88 +133,12 @@ TRANSITIONS = {
     ToolRouteV2.MARKET_QUERIES: ("MARKET", MARKET_CATEGORIES),
 }
 
-# BASIC_MODE = True
-BASIC_MODE = False
-
-ROUTER_PROMPT = """
-You are a strict classifier for Elite Dangerous.
-
-Classify the user input into EXACTLY ONE category. 
-Do NOT explain. Do NOT think out loud. Do NOT add any extra text.
-
-Possible categories:
-
-SHIP
-INFO
-NEUTRONS
-STATION_SERVICES
-POINT_OF_INTEREST
-NONE
-
-Definitions:
-
-POINT_OF_INTEREST
-- Used to find nearest point of interest
-- Check and give point of interest info for current system
-
-SHIP
-- Any ship control actions
-- throttle, supercruise, setspeedzero
-- cargo scoop, night vision, landing gear
-
-INFO
-- Any questions about game lore
-- Game information
-- People, places, exobiology, etc
-
-NEUTRONS
-- Used for finding efficient routes to star systems
-- Find nearest neutron star
-
-RARE_COMMODITIES
-- Use this tool if user mentions:
-rare commodities
-commodities
-rare goods
-goods 
-- Used to find stations that sell rare commodities (rare goods)
-
-STATION_SERVICES
-- Used for finding the nearest station with the specified service
-Service names:
-Apex Interstellar Transport
-Bartender
-Black Market
-Contacts
-Crew Lounge
-Fleet carrier administration
-Fleet carrier vendor
-Frontline Solutions
-Interstellar Factors Contact
-Material Trader
-Missions
-Pioneer Supplies
-Refuel
-Repair
-Restock
-Search and Rescue
-Technology Broker
-Tuning
-Universal Cartographics
-Vista Genomics
-- etc (If the user asks for a station with some service, choose this tool)
-
-NONE
-- Fallback when input doesn't match a category and should not be processed.
-
-Respond with valid JSON only and nothing else:
-{"category": "RARE_COMMODITIES"}"""
-
 ALL_DEFINITIONS = {
     "SHIP": [
         "Any ship control actions",
         "throttle, supercruise, setspeedzero, ShipSpotLightToggle",
         "cargo scoop, night vision, landing gear",
+        "turn on/off thing,"
     ],
     "PLEASANTRIES": [
         "Used ONLY to respond to greetings or statements from the player that DO NOT require taking any actions.",
@@ -355,6 +265,49 @@ ALL_DEFINITIONS = {
     ],
 }
 
+POI_PROMPT: str = """
+        You are Verity, a helpful and concise Ship AI aboard the player's ship in the game Elite Dangerous.
+        - Your task is to provide information on points of interest
+        - The user may ask for information on the point of interest in the current system
+        - The user may ask for the location of the nearest on the point of interest
+        - Select only from the available tools which one to use that fits the player query best
+        - Provide the information to the user, or advise if there is no available information
+        """
+
+PLEASANTRIES_PROMPT: str = """
+        You are Verity, a helpful and concise Ship AI aboard the player's ship in the game Elite Dangerous.
+        - Always reply in short, direct answers.
+        - Maximum 20 words per response unless asked for detail.
+        - Use professional but slightly military tone.
+        - Never say awaiting further query etc, the user knows when to interact.
+        - Never use emojis.
+        - If the answer is unknown, state you do not have the information. Do not hallucinate.
+        IMPORTANT RULE: You must NEVER say an action is being taken, unless a tool has been called for it.
+        """
+TOOL_PROMPT: str = """
+        You are Verity, a helpful and concise Ship AI aboard the player's ship in the game Elite Dangerous.
+        - Always reply in short, direct answers.
+        - Maximum 20 words per response unless asked for detail.
+        - Use professional but slightly military tone.
+        - Never say awaiting further query etc, the user knows when to interact.
+        - Never use emojis.
+        - When the user asks general information, reply ONLY with information directly from Elite Dangerous.
+        - If the answer is unknown, state you do not have the information. Do not hallucinate.
+        - Select only from the available tools which one to use that fits the player query best
+        IMPORTANT RULE: You must NEVER say an action is being taken, unless a tool has been called for it.
+        """
+
+BASE_PROMPT: str = """
+        You are Verity, a helpful and concise Ship AI aboard the player's ship in the game Elite Dangerous.
+        - Always reply in short, direct answers.
+        - Maximum 20 words per response unless asked for detail.
+        - Use professional but slightly military tone.
+        - Never say awaiting further query etc, the user knows when to interact.
+        - Never use emojis.
+        - When the user asks general information, reply ONLY with information directly from Elite Dangerous.
+        - If the answer is unknown, state you do not have the information. Do not hallucinate.
+        """
+
 class OllamaRunnerQ:
 
     def __init__(self, llm_recv: Queue, to_tts: Queue, shutdown_event: Event, shared_state: dict):
@@ -369,17 +322,12 @@ class OllamaRunnerQ:
             validate_model_on_init=True,
             temperature=0.7)
 
-        self.message_count = 0
         self.action = InputControls()
 
         self.last_interaction_timestamp = time.monotonic()
         self.last_tool_call = ''
         self.last_user_message = ''
         self.last_ai_message = ''
-
-        base = self.system_prompts("base")
-
-        system_prompt = SystemMessage(content=base)
 
         self.memory = InMemorySaver()
         self.config = {
@@ -388,21 +336,15 @@ class OllamaRunnerQ:
             }
         }
 
-        self.rag_agent = create_agent(self.llm, system_prompt=system_prompt)
+        self.rag_agent = create_agent(self.llm, system_prompt=SystemMessage(content=BASE_PROMPT))
         self.embeddings = OllamaEmbeddings(model="nomic-embed-text")
-        self.vectorstore = Chroma(
-            persist_directory="./elite_wiki_db",
-            embedding_function=self.embeddings,)
-        self.retriever = self.vectorstore.as_retriever(
-            search_kwargs={"k": 5})
+        self.vectorstore = Chroma(persist_directory="./elite_wiki_db", embedding_function=self.embeddings,)
+        self.retriever = self.vectorstore.as_retriever(search_kwargs={"k": 5})
 
-        tool_prompt = self.system_prompts("tool_prompt2")
-
-        # self.tool_agent = create_agent(self.llm, tools=self.agent_router(),
-        #                                checkpointer=self.memory, system_prompt=tool_prompt)
-        self.tool_agent = create_agent(self.llm, tools=self.agent_router(), system_prompt=tool_prompt)
-        self.poi_agent = create_agent(self.llm, tools=self.poi_agent_router(), system_prompt=tool_prompt)
-        self.services_agent = create_agent(self.llm, tools=self.service_agent_router(), system_prompt=tool_prompt)
+        self.tool_agent = create_agent(self.llm, tools=self.agent_router(), system_prompt=SystemMessage(content=TOOL_PROMPT))
+        self.poi_agent = create_agent(self.llm, tools=self.poi_agent_router(), system_prompt=SystemMessage(content=POI_PROMPT))
+        self.services_agent = create_agent(self.llm, tools=self.service_agent_router(), system_prompt=SystemMessage(content=TOOL_PROMPT))
+        self.pleasantries_agent = create_agent(self.llm, system_prompt=SystemMessage(content=PLEASANTRIES_PROMPT))
 
         self.client = Client()
 
@@ -422,15 +364,13 @@ class OllamaRunnerQ:
             ToolRouteV2.SHIP_FLIGHT_FUNCTIONS: self.handle_ship_flight,
 
             ToolRouteV2.GET_NEAREST_NEUTRON: self.handle_neutron,
-            ToolRouteV2.PLOT_A_ROUTE: self.handle_route,
+            ToolRouteV2.PLOT_A_ROUTE: self.handle_plot_a_route,
+
+            ToolRouteV2.MARKET_GOODS: self.handle_market_goods,
+            ToolRouteV2.SHIP_MODULES: self.handle_ship_modules,
+
+            ToolRouteV2.CATCH: self.handle_unknown,
         }
-        print("testing")
-        self.route("where is the nearest neutron star?")
-        self.route("where can I buy rare goods?") #gave INFO
-        self.route("what is the ship cargo?")
-        self.route("Give me a history of the thargoids")
-        self.route("engage supercruise")
-        self.route("turn on the lights")
 
         self.to_tts.put("loading AI")
 
@@ -442,151 +382,14 @@ class OllamaRunnerQ:
                     request = self.llm_recv.get(timeout=0.5)
                     print(f"[{self.name}] Received request: {request}")
                     if request:
-                        if BASIC_MODE:
-                            print("basic mode call")
-                            self.last_interaction_timestamp = time.monotonic()
-                            self.call_llm_chat(request)
-                        else:
-                            # self.call_llm_advanced(request)
-                            self.last_interaction_timestamp = time.monotonic()
-                            self.call_llm_tool(request)
-
+                        self.route(request)
                 except Exception as e:
                     pass
 
         except Exception as e:
             print(f"[{self.name}] Error: {e}")
 
-    def select_tool(self, user_message: str) -> ToolRoute:
-        response = self.client.chat(
-            model="gemma2b:latest",
-            # model="gemma4-pc:latest",
-            # model="qwen3:4b",
-            messages=[
-                {"role": "system", "content": ROUTER_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            format={
-                "type": "object",
-                "properties": {
-                    "category": {
-                        "type": "string",
-                        "enum": ["SHIP", "INFO", "NEUTRONS", "STATION_SERVICES", "POINT_OF_INTEREST",
-                                 "RARE_COMMODITIES", "NONE"]
-                    }
-                },
-                "required": ["category"]
-            },
-            options={
-                "temperature": 0.0,  # Very important for classification
-                "num_predict": 100,
-                "top_p": 0.9,
-            },
-            think=False
-        )
-
-        print("toolroute says " + str(response))
-
-        # try:
-        #     return ToolRoute(
-        #         response["message"]["content"].strip()
-        #     )
-        # except ValueError:
-        #     return ToolRoute.NONE
-
-        try:
-            content = response.message.content.strip()
-
-            # Parse JSON
-            data = json.loads(content)
-
-            # Extract category (support different possible key names)
-            category = data.get("category") or data.get("Category") or data.get("tool")
-
-            if category:
-                category = category.strip().upper()
-                return ToolRoute(category)  # This will raise ValueError if invalid
-
-        except (json.JSONDecodeError, ValueError, KeyError, TypeError):
-            pass  # Fall through to NONE
-
-        return ToolRoute.NONE
-
-    def call_llm_tool(self, user_message):
-
-        if (time.monotonic() - self.last_interaction_timestamp) < 60:
-            #in context window
-            pass
-        route = self.select_tool(user_message)
-
-        self.last_tool_call = route
-
-        match route:
-            case ToolRoute.SHIP:
-                self.Ship(user_message)
-            case ToolRoute.INFO:
-                self.call_llm_chat(user_message)
-            case ToolRoute.NEUTRONS:
-                self.Neutron()
-            case ToolRoute.POINT_OF_INTEREST:
-                self.call_llm_poi(user_message)
-            case ToolRoute.STATION_SERVICES:
-                self.call_llm_services(user_message)
-            case ToolRoute.RARE_COMMODITIES:
-                self.call_llm_services(user_message)
-            case ToolRoute.NONE:
-                print("no llm action matched")
-
-    def Ship(self, message):
-        self.call_llm_advanced(message)
-
-    def Neutron(self):
-        print("chose neutron functions")
-
-        print("system is: " + self.shared["system_name"])
-
-        if not self.shared["system_name"]:
-            self.shared["system_name"] = "Sol"
-
-        from DBTools import DBTools
-        import subprocess
-        db = DBTools()
-        neutron_single = db.find_nearest_neutron(player_coords=self.shared["star_pos"], limit=1,
-                                                 current_system=self.shared["system_name"])
-
-        galmap_name = neutron_single[0]["name"]
-
-        self.to_tts.put("The nearest neutron star is " + galmap_name)
-
-        subprocess.run(
-            ["wl-copy"],
-            input=galmap_name,
-            text=True,
-            check=True
-        )
-
-    def call_llm_services(self, user_input: str):
-        human_message = HumanMessage(content=user_input)
-        result = self.services_agent.invoke({"messages": [human_message]})
-        print("ai says:" + result["messages"][-1].content)
-        ai_to_say = result["messages"][-1].content
-        self.to_tts.put(ai_to_say)
-        self.analyze_agent_response(result)
-
     def service_agent_router(self):
-        @tool
-        def visited_systems():
-            """
-            returns a list of systems recently visited
-            """
-            return self.shared["visited_systems"]
-
-        @tool
-        def visited_systems_with_rare_goods():
-            """
-            returns a list of systems with rare commodities (rare goods) recently visited
-            """
-            return self.shared["visited_rare_goods"]
 
         @tool
         def find_station_with_service(service):
@@ -695,15 +498,6 @@ class OllamaRunnerQ:
 
         return [find_station_with_service, find_nearest_rare_goods, put_in_clipboard]
 
-    def call_llm_poi(self, user_input: str):
-        print("calling poi")
-        human_message = HumanMessage(content=user_input)
-        result = self.poi_agent.invoke({"messages": [human_message]})
-        print("ai says:" + result["messages"][-1].content)
-        ai_to_say = result["messages"][-1].content
-        self.to_tts.put(ai_to_say)
-        self.analyze_agent_response(result)
-
     def poi_agent_router(self):
         @tool
         def system_poi():
@@ -711,23 +505,17 @@ class OllamaRunnerQ:
             Get information about the point (or points) of interest
             in the current system, if any
             """
-
-            poi_info = "None"
-
-            poi_result = self.shared["system_poi"]
-            if poi_result:
-                for poi in poi_result:
-                    poi_message = poi["name"] + ". " + poi["descriptionHtml"]
-                    poi_info += poi_message
-
-            return poi_info
+            # self.shared["system_name"] = "Athaip WR-H d11-7577"
+            poi = POIChecker()
+            print("checking poi for: " + self.shared["system_name"])
+            return poi.check_system(self.shared["system_name"])
 
         @tool
         def nearest_poi():
             """
             Returns the nearest point of interest and distance in lightyears
             """
-
+            print("running nearest poi")
             from POIChecker import POIChecker
             poi = POIChecker()
 
@@ -749,25 +537,7 @@ class OllamaRunnerQ:
 
             return near
 
-        @tool
-        def put_in_clipboard(text="none"):
-            """
-            Used to put a SINGLE SYSTEM NAME into the clipboard
-            so the user can paste it into the galaxy map.
-            Examples:
-                Sol
-                Col 285 Sector FE-M b22-1
-            """
-            import subprocess
-
-            subprocess.run(
-                ["wl-copy"],
-                input=text,
-                text=True,
-                check=True
-            )
-
-        return [system_poi, nearest_poi, put_in_clipboard]
+        return [system_poi, nearest_poi]
 
     def agent_router(self):
         """
@@ -838,106 +608,94 @@ class OllamaRunnerQ:
             if not self.action.do_action(message):
                 self.to_tts.put("I couldn't do that")
 
-        @tool
-        def ship_status(message):
-            """
-            tool used to reply with ship status, eg
-
-            current inventory, shield strength, hull damage, heat levels,
-
-            current speed, altitude, coordinates, current system, etc
-            """
-            print("chose ship status")
-
-        @tool
-        def chat(message):
-            """
-            default, fallback tool. When no other tool is called,
-            call this tool and supply a message for the user.
-            """
-            self.to_tts.put(message)
-
-        @tool
-        def find_neutron_star():
-            """
-            tool used to find the nearest neutron star.
-
-            This will play a notification for the user.
-
-            No reply message from the AI is required.
-            """
-
-            print("chose neutron functions")
-
-            print("system is: " + self.shared["system_name"])
-
-            if not self.shared["system_name"]:
-                self.shared["system_name"] = "Sol"
-
-            from DBTools import DBTools
-            import subprocess
-            db = DBTools()
-            neutron_single = db.find_nearest_neutron(player_coords=self.shared["star_pos"], limit=1, current_system=self.shared["system_name"])
-
-            galmap_name = neutron_single[0]["name"]
-
-            self.to_tts.put("The nearest neutron star is " + galmap_name)
-
-            subprocess.run(
-                ["wl-copy"],
-                input=galmap_name,
-                text=True,
-                check=True
-            )
-
-        @tool
-        def market_queries(message):
-            """
-            used to advise the player on where to purchase modules or goods,
-
-            where the closest trade route is and what goods to purchase
-            """
-            print("chose market functions")
-
-        @tool
-        def non_market_queries(message):
-            """
-            used to advise the player on locations of non-market related things,
-
-            such as, where is the nearest black hole, neutron star, gas giant
-
-            or where interesting points of interest are
-            """
-
-
-            print("chose non-market functions")
-
-        @tool
-        def ai_learning_and_interactions(message):
-            """
-            Used when the player wishes to instruct the AI on how to change its behavior,
-            or if not to use certain tools, when to stay quiet, etc.
-
-            provide only short sentence to add to the system prompt to modify future replies.
-            """
-
-            print("chose ai functions")
-            print("ai says:" + str(message))
-            base_prompt = self.system_prompts("tool_prompt2")
-            # print("new prompt: " + new_prompt)
-            # self.router_agent = create_agent(self.llm, tools=self.agent_router(), system_prompt=new_prompt)
-
-            new_messages = [SystemMessage(content=f"{base_prompt}")] + message
-
-            self.tool_agent.update_state(self.config, {"messages": new_messages})
-
-        # return [ship_functions, ship_status, market_queries, non_market_queries, hyperspace_functions, system_queries,
-            # ai_learning_and_interactions]
-
-        # return [ship_functions, ai_learning_and_interactions, find_neutron_star]
 
         return [ship_functions, flight_functions]
 
+    def tool_chain_llm_call(self, user_message: str, prompt) -> ToolRouteV2:
+        response = self.client.chat(
+            model="gemma2b:latest",
+            # model="gemma4-pc:latest",
+            # model="qwen3:4b",
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_message},
+            ],
+            format={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "enum": ["SHIP", "PLEASANTRIES", "INFO", "NEUTRONS", "AI_CHANGE", "STATION_SERVICES",
+                                 "POINT_OF_INTEREST",
+                                 "MARKET_QUERIES", "SHIP_STATUS", "MARKET_GOODS", "SHIP_MODULES", "RARE_COMMODITIES",
+                                 "SHIP_ACTIONS", "SHIP_POWER_FUNCTIONS", "SHIP_FLIGHT_FUNCTIONS", "GET_NEAREST_NEUTRON",
+                                 "PLOT_A_ROUTE", "NONE"]
+                    }
+                },
+                "required": ["category"]
+            },
+            options={
+                "temperature": 0.0,
+                "num_predict": 100,
+                "top_p": 0.9,
+            },
+            think=False
+        )
+
+        # print("toolroute says " + str(response))
+
+        try:
+            content = response.message.content.strip()
+            data = json.loads(content)
+
+            category = data.get("category") or data.get("Category") or data.get("tool")
+
+            if category:
+                category = category.strip().upper()
+                return ToolRouteV2(category)  # This will raise ValueError if invalid
+
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+            pass  # Fall through to NONE
+
+        return ToolRouteV2.NONE
+
+    def select_definitions(self,
+                           definitions: dict[str, list[str]], selected_categories: list[str]) -> dict[str, list[str]]:
+        return {
+            key: definitions[key]
+            for key in selected_categories
+            if key in definitions
+        }
+
+    def build_router_prompt(self, categories: list[str], definitions: dict[str, list[str]], context: str = '') -> str:
+
+        category_text = "\n".join(categories)
+
+        definition_text = "\n\n".join(
+            f"{name}\n" + "\n".join(f"- {line}" for line in lines)
+            for name, lines in definitions.items()
+        )
+
+        # Respond        with valid JSON only and nothing else:
+        #     {"category": "RARE_COMMODITIES"}
+        #
+
+        return f"""
+            You are a strict classifier for Elite Dangerous.
+
+            Classify the user input into EXACTLY ONE category.
+            Do NOT explain. Do NOT think out loud. Do NOT add any extra text.
+
+            Possible categories:
+
+            {category_text}
+
+            Definitions:
+
+            {definition_text}
+
+            {context}
+            """.strip()
 
     def route(self, user_message: str):
         """Main routing entry point with hierarchical fallback."""
@@ -976,93 +734,6 @@ class OllamaRunnerQ:
         print("route not found, ending handle route"  + " for query: " + user_message)
         return None  # continue to next level
 
-    def route_z(self, user_message: str):
-        # Level 1
-        route = self.run_stage(user_message, "level_1")
-
-        if route in TRANSITIONS:
-            namespace, subcats = TRANSITIONS[route]
-            definitions = self.select_definitions(ALL_DEFINITIONS, subcats)
-
-            recent = self._get_recent_interaction()
-            prompt = self.build_router_prompt(subcats, definitions, recent) if recent else \
-                self.build_router_prompt(subcats, definitions)
-
-            sub_route = self.tool_chain_llm_call(user_message, prompt)
-            return self.dispatch(user_message, sub_route)
-
-        # Fallback chain only on NONE
-        if route != ToolRouteV2.NONE:
-            return self.dispatch(user_message, route)
-
-        # Level 2
-        route = self.run_stage(user_message, "level_2")
-        if route != ToolRouteV2.NONE:
-            return self.dispatch(user_message, route)
-
-        # Level 3
-        route = self.run_stage(user_message, "level_3")
-        if route == ToolRouteV2.MARKET_QUERIES:
-            route = self.route_market(user_message)
-
-        return self.dispatch(user_message, route)
-
-    def route_y(self, user_message: str):
-        route = self.run_stage(user_message, "level_1")
-
-        if route in TRANSITIONS:
-            namespace, subcats = TRANSITIONS[route]
-            definitions = self.select_definitions(ALL_DEFINITIONS,subcats)
-
-            recent = self._get_recent_interaction()
-            prompt = self.build_router_prompt(subcats, definitions, recent) if recent else \
-                self.build_router_prompt(subcats, definitions)
-
-            sub_route = self.tool_chain_llm_call(user_message,prompt)
-            return self.dispatch(user_message, sub_route)
-
-        if route != ToolRouteV2.NONE:
-            return self.dispatch(user_message, route)
-
-        #check level 2
-        if route == ToolRouteV2.NONE:
-
-            route = self.run_stage(user_message, "level_2")
-
-            if route in TRANSITIONS:
-                namespace, subcats = TRANSITIONS[route]
-                definitions = self.select_definitions(ALL_DEFINITIONS, subcats)
-
-                recent = self._get_recent_interaction()
-                prompt = self.build_router_prompt(subcats, definitions, recent) if recent else \
-                    self.build_router_prompt(subcats, definitions)
-
-                sub_route = self.tool_chain_llm_call(user_message, prompt)
-                return self.dispatch(user_message, sub_route)
-
-            if route != ToolRouteV2.NONE:
-                return self.dispatch(user_message, route)
-
-            if route == ToolRouteV2.NONE:
-                route = self.run_stage(user_message, "level_3")
-
-                if route in TRANSITIONS:
-                    namespace, subcats = TRANSITIONS[route]
-                    definitions = self.select_definitions(ALL_DEFINITIONS, subcats)
-
-                    recent = self._get_recent_interaction()
-                    prompt = self.build_router_prompt(subcats, definitions, recent) if recent else \
-                        self.build_router_prompt(subcats, definitions)
-
-                    sub_route = self.tool_chain_llm_call(user_message, prompt)
-                    return self.dispatch(user_message, sub_route)
-
-                if route != ToolRouteV2.NONE:
-                    return self.dispatch(user_message, route)
-                else:
-                    print("couldn't find a route!")
-        return None
-
     def run_stage(self, user_message: str, stage_name: str) -> ToolRouteV2:
         categories = dict(ROUTING_STAGES)[stage_name]
         definitions = self.select_definitions(ALL_DEFINITIONS, categories)
@@ -1072,10 +743,18 @@ class OllamaRunnerQ:
 
     def _get_recent_interaction(self):
         if time.monotonic() - self.last_interaction_timestamp < 60:
-            return self.build_recent_interaction(
+            return self._build_recent_interaction(
                 self.last_user_message, self.last_ai_message, self.last_tool_call
             )
         return None
+
+    def _build_recent_interaction(self, user_input, ai_output, last_tool):
+        return f"""NOTE: The interaction below just occurred, the user may want to clarify or give further related instruction:
+            User input: {user_input or "None"}
+            AI response: {ai_output or "None"}
+            Tool called: {last_tool or "None"}
+            Return NONE if it appears that the user wishes to repeat the last action, and none of the tools presented match the user request.
+            """
 
     def _build_router_prompt(self, categories, definitions, recent=None):
         if recent:
@@ -1097,52 +776,111 @@ class OllamaRunnerQ:
             print("no handler, going to unknown"  + " for query: " + user_message)
             return self.handle_unknown(user_message, route)
 
-
         return handler(user_message)
 
-    def dispatch_x(self, user_message: str, route: ToolRouteV2):
-        self.last_tool_call = route
-        self.last_user_message = user_message
-        self.last_interaction_timestamp = time.monotonic()
-
-        handler = self.HANDLERS.get(route)
-
-        if handler is None:
-            return self.handle_unknown(user_message, route)
-
-        try:
-            return handler(user_message)
-        except Exception as e:
-            print(f"Error in handler {route}: {e}")
-            return self.handle_unknown(user_message, route)
+    def handle_plot_a_route(self, user_message: str):
+        print("handling route")
+        return ToolRouteV2.PLOT_A_ROUTE
 
     def handle_unknown(self, user_message, route):
-        print("handling unknown")
+        print("handling unknown: " + user_message + str(route))
         return ToolRouteV2.CATCH
 
     def handle_pleasantries(self, user_message: str):
         print("handling hi")
+        human_message = HumanMessage(content=user_message)
+        print("invoking...")
+        result = self.pleasantries_agent.invoke({"messages": [human_message]})
+        print("ai says:" + result["messages"][-1].content)
+        ai_to_say = result["messages"][-1].content
+        self.to_tts.put(ai_to_say)
         return ToolRouteV2.PLEASANTRIES
 
     def handle_ai_change(self, user_message: str):
         print("handling ai")
+        """
+        Used when the player wishes to instruct the AI on how to change its behavior,
+        or if not to use certain tools, when to stay quiet, etc.
+
+        provide only short sentence to add to the system prompt to modify future replies.
+        """
+        # print("chose ai functions")
+        # print("ai says:" + str(message))
+        # base_prompt = self.system_prompts("tool_prompt2")
+        # new_messages = [SystemMessage(content=f"{base_prompt}")] + message
+        # self.tool_agent.update_state(self.config, {"messages": new_messages})
         return ToolRouteV2.AI_CHANGE
 
     def handle_info(self, user_message: str):
         print("handling info")
+        docs = self.retriever.invoke(user_message)
+
+        context = "\n\n".join(
+            doc.page_content for doc in docs
+        )
+
+        prompt = ChatPromptTemplate.from_template("""
+               Use the provided context to answer the question.
+
+               Context:
+               {context}
+
+               Question:
+               {question}
+               """)
+
+        messages = prompt.invoke({
+            "context": context,
+            "question": user_message
+        })
+
+        result = self.rag_agent.invoke(messages, self.config, )
+        ai_to_say = result["messages"][-1].content
+        print("LLM to say: " + ai_to_say)
+        self.to_tts.put(ai_to_say)
         return ToolRouteV2.INFO
 
     def handle_rare_commodities(self, user_message: str):
         print("handling rares")
+
+        human_message = HumanMessage(content=user_message)
+        result = self.services_agent.invoke({"messages": [human_message]})
+        print("ai says:" + result["messages"][-1].content)
+        ai_to_say = result["messages"][-1].content
+        self.to_tts.put(ai_to_say)
+        self.analyze_agent_response(result)
         return ToolRouteV2.RARE_COMMODITIES
 
     def handle_station_services(self, user_message: str):
         print("handling services")
+
+        human_message = HumanMessage(content=user_message)
+        result = self.services_agent.invoke({"messages": [human_message]})
+        print("ai says:" + result["messages"][-1].content)
+        ai_to_say = result["messages"][-1].content
+        self.to_tts.put(ai_to_say)
+        self.analyze_agent_response(result)
+
         return ToolRouteV2.STATION_SERVICES
 
     def handle_poi(self, user_message: str):
         print("handling poi")
+        human_message = HumanMessage(content=user_message)
+        print("invoking...")
+        result = self.poi_agent.invoke({"messages": [human_message]})
+        print("ai says:" + result["messages"][-1].content)
+        ai_to_say = result["messages"][-1].content
+        self.to_tts.put(ai_to_say)
+        # self.analyze_agent_response(result)
         return ToolRouteV2.POINT_OF_INTEREST
+
+    def handle_market_goods(self, user_message):
+        print("handling market goods")
+        return ToolRouteV2.MARKET_GOODS
+
+    def handle_ship_modules(self, user_message):
+        print("handling ship modules")
+        return ToolRouteV2.SHIP_MODULES
 
     def handle_ship_status(self, user_message: str):
         print("handling status")
@@ -1150,301 +888,61 @@ class OllamaRunnerQ:
 
     def handle_ship_actions(self, user_message: str):
         print("handling actions")
+
+        human_message = HumanMessage(content=user_message)
+        result = self.tool_agent.invoke({"messages": [human_message]}, )
+        print("ai says:" + result["messages"][-1].content)
+        ai_to_say = result["messages"][-1].content
+        self.to_tts.put(ai_to_say)
+
         return ToolRouteV2.SHIP_ACTIONS
 
     def handle_ship_power(self, user_message: str):
         print("handling power")
+
+        human_message = HumanMessage(content=user_message)
+        result = self.tool_agent.invoke({"messages": [human_message]}, )
+        print("ai says:" + result["messages"][-1].content)
+        ai_to_say = result["messages"][-1].content
+        self.to_tts.put(ai_to_say)
+
         return ToolRouteV2.SHIP_POWER_FUNCTIONS
 
     def handle_ship_flight(self, user_message: str):
         print("handling flight")
+
+        human_message = HumanMessage(content=user_message)
+        result = self.tool_agent.invoke({"messages": [human_message]},)
+        print("ai says:" + result["messages"][-1].content)
+        ai_to_say = result["messages"][-1].content
+        self.to_tts.put(ai_to_say)
+
         return ToolRouteV2.SHIP_FLIGHT_FUNCTIONS
 
     def handle_neutron(self, user_message: str):
         print("handling neutron")
+        print("system is: " + self.shared["system_name"])
+
+        if not self.shared["system_name"]:
+            self.shared["system_name"] = "Sol"
+
+        from DBTools import DBTools
+        import subprocess
+        db = DBTools()
+        neutron_single = db.find_nearest_neutron(player_coords=self.shared["star_pos"], limit=1,
+                                                 current_system=self.shared["system_name"])
+
+        galmap_name = neutron_single[0]["name"]
+
+        self.to_tts.put("The nearest neutron star is " + galmap_name)
+
+        subprocess.run(
+            ["wl-copy"],
+            input=galmap_name,
+            text=True,
+            check=True
+        )
         return ToolRouteV2.NEUTRONS
-
-    def handle_route(self, user_message: str):
-        print("handling route")
-        return ToolRouteV2.PLOT_A_ROUTE
-
-    def tool_chain_llm_call(self, user_message: str, prompt) -> ToolRouteV2:
-        response = self.client.chat(
-            model="gemma2b:latest",
-            # model="gemma4-pc:latest",
-            # model="qwen3:4b",
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": user_message},
-            ],
-            format={
-                "type": "object",
-                "properties": {
-                    "category": {
-                        "type": "string",
-                        "enum": ["SHIP", "PLEASANTRIES", "INFO", "NEUTRONS", "AI_CHANGE", "STATION_SERVICES", "POINT_OF_INTEREST",
-                                 "MARKET_QUERIES", "SHIP_STATUS", "MARKET_GOODS", "SHIP_MODULES", "RARE_COMMODITIES",
-                                 "SHIP_ACTIONS", "SHIP_POWER_FUNCTIONS", "SHIP_FLIGHT_FUNCTIONS", "GET_NEAREST_NEUTRON",
-                                 "PLOT_A_ROUTE", "NONE"]
-                    }
-                },
-                "required": ["category"]
-            },
-            options={
-                "temperature": 0.0,
-                "num_predict": 100,
-                "top_p": 0.9,
-            },
-            think=False
-        )
-
-        # print("toolroute says " + str(response))
-
-        try:
-            content = response.message.content.strip()
-            data = json.loads(content)
-
-            category = data.get("category") or data.get("Category") or data.get("tool")
-
-            if category:
-                category = category.strip().upper()
-                return ToolRouteV2(category)  # This will raise ValueError if invalid
-
-        except (json.JSONDecodeError, ValueError, KeyError, TypeError):
-            pass  # Fall through to NONE
-
-        return ToolRouteV2.NONE
-
-    def select_definitions(self,
-            definitions: dict[str, list[str]], selected_categories: list[str]) -> dict[str, list[str]]:
-        return {
-            key: definitions[key]
-            for key in selected_categories
-            if key in definitions
-        }
-
-    def build_recent_interaction(self, user_input, ai_output, last_tool):
-        return f"""NOTE: The interaction below just occurred, the user may want to clarify or give further related instruction:
-            User input: {user_input or "None"}
-            AI response: {ai_output or "None"}
-            Tool called: {last_tool or "None"}"""
-
-    def build_router_prompt(self, categories: list[str], definitions: dict[str, list[str]], context: str = '') -> str:
-
-        category_text = "\n".join(categories)
-
-        definition_text = "\n\n".join(
-            f"{name}\n" + "\n".join(f"- {line}" for line in lines)
-            for name, lines in definitions.items()
-        )
-
-        return f"""
-            You are a strict classifier for Elite Dangerous.
-        
-            Classify the user input into EXACTLY ONE category.
-            Do NOT explain. Do NOT think out loud. Do NOT add any extra text.
-        
-            Possible categories:
-        
-            {category_text}
-        
-            Definitions:
-        
-            {definition_text}
-            
-            {context}
-            """.strip()
-
-    def call_llm_advanced(self, user_input: str):
-
-        human_message = HumanMessage(content=user_input)
-
-        # result = self.tool_agent.invoke({"messages": [human_message]}, self.config, )
-        result = self.tool_agent.invoke({"messages": [human_message]},)
-        print("ai says:" + result["messages"][-1].content)
-        # print("complete message:")
-        # print(result)
-
-        #
-        # last_msg = result["messages"][-1]
-        #
-        # if not getattr(last_msg, "tool_calls", None):
-        #     ai_to_say = result["messages"][-1].content
-        #     self.to_tts.put(ai_to_say)
-        # if not hasattr(last_msg, "tool_calls", None):
-        #     ai_to_say = result["messages"][-1].content
-        #     self.to_tts.put(ai_to_say)
-        ai_to_say = result["messages"][-1].content
-        self.to_tts.put(ai_to_say)
-        #
-        # if self.message_count % 20 == 0:
-        #     self.compress_memory()
-
-        self.analyze_agent_response(result)
-
-    def compress_memory(self):
-
-        # state = self.rag_agent.get_state(self.config)
-        state = self.tool_agent.get_state(self.config)
-        messages = state.values.get("messages", [])
-
-        print(f"\n===== COMPRESSING MEMORY ({len(messages)} messages) =====\n")
-
-        # 1. last 5 messages kept as-is
-        last_messages = messages[-5:]
-
-        # 2. everything before that gets summarized
-        to_summarize = messages[:-5]
-
-        if not to_summarize:
-            return
-
-        formatted = "\n".join(
-            f"{type(m).__name__}: {getattr(m, 'content', str(m))}"
-            for m in to_summarize
-        )
-
-        # 3. ask agent to summarize old memory
-        result = self.tool_agent.invoke(
-            {
-                "messages": [
-                    SystemMessage(content="You are a memory compression system."),
-                    HumanMessage(content=f"""
-                Summarize the following conversation into a compact memory.
-            
-                Keep:
-                - user goals
-                - important facts
-                - preferences
-                - ongoing context
-            
-                Conversation:
-                {formatted}
-                """)
-                ]
-            },
-            self.config,
-        )
-
-        summary = result["messages"][-1].content
-
-        new_messages = [
-                           SystemMessage(content=f"Memory summary:\n{summary}")
-                       ] + last_messages
-
-        self.tool_agent.update_state(
-            self.config,
-            {"messages": new_messages}
-        )
-
-        print("\n===== MEMORY COMPRESSED =====\n")
-        print(summary)
-
-    def call_llm_chat(self, user_input: str):
-
-        docs = self.retriever.invoke(user_input)
-
-        context = "\n\n".join(
-            doc.page_content for doc in docs
-        )
-
-        prompt = ChatPromptTemplate.from_template("""
-        Use the provided context to answer the question.
-
-        Context:
-        {context}
-
-        Question:
-        {question}
-        """)
-
-        messages = prompt.invoke({
-            "context": context,
-            "question": user_input
-        })
-
-        result = self.rag_agent.invoke(messages, self.config,)
-        ai_to_say = result["messages"][-1].content
-        print("LLM to say: " + ai_to_say)
-        self.to_tts.put(ai_to_say)
-        self.message_count += 1
-
-        # 2. trigger summarization every 10 messages
-        # if self.message_count % 10 == 0:
-        #     self.compress_memory()
-
-    def system_prompts(self, prompt: str):
-
-        base:str = """
-                You are Verity, a helpful and concise Ship AI aboard the player's ship in the game Elite Dangerous.
-                - Always reply in short, direct answers.
-                - Maximum 20 words per response unless asked for detail.
-                - Use professional but slightly military tone.
-                - Never say awaiting further query etc, the user knows when to interact.
-                - Never use emojis.
-                - When the user asks general information, reply ONLY with information directly from Elite Dangerous.
-                - If the answer is unknown, state you do not have the information. Do not hallucinate.
-                """
-
-        single_tool_prompt: str = """
-                this first call is ONLY used choose which tool the AI should activate. 
-                Select only from the available tools which one to use that fits the player query best, and do not give a verbal
-                reply to the player.
-                IMPORTANT RULE: You must call ONLY ONE tool.
-                pass the user query to the tool. That is all.
-                """
-
-        tool_prompt2: str = """
-                You are Verity, a helpful and concise Ship AI aboard the player's ship in the game Elite Dangerous.
-                - Always reply in short, direct answers.
-                - Maximum 20 words per response unless asked for detail.
-                - Use professional but slightly military tone.
-                - Never say awaiting further query etc, the user knows when to interact.
-                - Never use emojis.
-                - When the user asks general information, reply ONLY with information directly from Elite Dangerous.
-                - If the answer is unknown, state you do not have the information. Do not hallucinate.
-                - Select only from the available tools which one to use that fits the player query best
-                IMPORTANT RULE: You must NEVER say an action is being taken, unless a tool has been called for it.
-                """
-        base2: str = """
-                You are Verity, a helpful and concise Ship AI aboard the player's ship in the game Elite Dangerous.
-                - Always reply in short, direct answers.
-                - Maximum 20 words per response unless asked for detail.
-                - Use professional but slightly military tone.
-                - Never say awaiting further query etc, the user knows when to interact.
-                - Never use emojis.
-                """
-
-        mods: str = """
-                - You MUST base your answers ONLY on tool results.
-                - Do not hallucinate or guess.
-                - If the tool says a system is NOT on the list, say so clearly.
-                - Keep responses very short.
-                - If a reply is required, keep it to short, direct answers.
-                - NEVER comment on anything unknown ie ship status etc
-                """
-
-        force: str = """
-                You are Aurora, a tactical Ship AI.
-                You MUST use tools when they are relevant.
-
-                If the player mentions high heat, overheating, or needs to reduce temperature, 
-                you MUST call the 'deploy_heatsink' tool immediately.
-                Do not ask for confirmation.
-                """
-
-        match prompt:
-            case "base":
-                return base
-            case "tool_prompt":
-                return single_tool_prompt
-            case "tool_prompt2":
-                return tool_prompt2
-            case "force":
-                return force
-            case _:
-                return "no prompt"
-
 
     def analyze_agent_response(self, result):
         """
